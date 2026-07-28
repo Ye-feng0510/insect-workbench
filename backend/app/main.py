@@ -7,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import FRONTEND_DIST, settings
 from app.database import init_db
+from app.routers import settings as settings_router
 
 
 @asynccontextmanager
@@ -35,6 +36,10 @@ app.add_middleware(
 async def health() -> dict:
     """健康检查接口,用于前后端连通测试。"""
     return {"status": "ok", "app": settings.app_name}
+
+
+# 注册路由
+app.include_router(settings_router.router)
 
 
 # 生产模式: 若前端已构建,则由 FastAPI 托管静态文件

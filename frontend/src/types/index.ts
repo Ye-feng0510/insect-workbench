@@ -1,0 +1,150 @@
+/** 后端 API 类型定义 */
+
+export interface ModelConfig {
+  base_url: string
+  api_key: string
+  model_name: string
+}
+
+export interface PromptConfig {
+  recognition_prompt: string
+  taxonomy_prompt: string
+}
+
+export interface TestResult {
+  passed: boolean
+  message: string
+}
+
+export interface TestModelResponse {
+  image_test: TestResult
+  text_json_test: TestResult
+  overall: boolean
+}
+
+export interface SheetInfo {
+  name: string
+  rows: number
+  cols: number
+}
+
+export interface FieldMappingUpdate {
+  target_sheet: string
+  header_row: number
+  start_row: number
+  style_source_row: number
+  field_mapping: Record<string, string>
+}
+
+export interface TemplateInfo {
+  id: number
+  original_filename: string
+  target_sheet: string
+  header_row: number
+  start_row: number
+  base_write_row: number
+  style_source_row: number
+  field_mapping: Record<string, string>
+  is_active: boolean
+  created_at: string
+}
+
+export interface ExtractResponse {
+  record_id: number
+  status: string
+  extracted: Record<string, string>
+  confidence: Record<string, string>
+  evidence: Record<string, string>
+  warnings: string[]
+}
+
+export interface ConfirmExtractionRequest {
+  confirmed: Record<string, string>
+  duplicate_action?: string | null
+}
+
+export interface ConfirmExtractionResponse {
+  record_id: number
+  status: string
+  fields: Record<string, string>
+  excel_row: number
+  warnings: string[]
+}
+
+export interface RecordSummary {
+  id: number
+  image_filename: string
+  status: string
+  zhongming: string
+  chandi3: string
+  tuxiang: string
+  caijiren: string
+  caiji_riqi: string
+  created_at: string
+  updated_at: string
+}
+
+export interface RecordDetail {
+  id: number
+  image_filename: string
+  image_path: string
+  processed_image_path: string
+  rotation_degrees: number
+  status: string
+  extracted_draft: Record<string, unknown>
+  confirmed_extraction: Record<string, unknown>
+  taxonomy_result: Record<string, unknown>
+  warnings: string[]
+  fields: Record<string, string>
+  created_at: string
+  updated_at: string
+}
+
+export interface PreviewColumn {
+  letter: string
+  field: string
+}
+
+export interface PreviewRow {
+  excel_row: number
+  record_id: number | null
+  status: string
+  values: Record<string, string>
+}
+
+export interface PreviewResponse {
+  sheet_name: string
+  mode: string
+  header_row: number
+  base_write_row: number
+  columns: PreviewColumn[]
+  rows: PreviewRow[]
+  completed_count: number
+  latest_write_row: number | null
+  next_write_row: number
+  last_updated: string
+}
+
+export interface ExportSummary {
+  completed_count: number
+  awaiting_confirmation_count: number
+  template_name: string
+  target_sheet: string
+  start_write_row: number
+}
+
+export interface ExportResult {
+  filename: string
+  download_url: string
+  record_count: number
+}
+
+/** 提取后端错误消息。 */
+export function extractErrorMessage(err: unknown, fallback = '操作失败'): string {
+  if (err && typeof err === 'object') {
+    const any = err as { response?: { data?: { detail?: string } }; message?: string }
+    if (any.response?.data?.detail) return any.response.data.detail
+    if (any.message) return any.message
+  }
+  return fallback
+}

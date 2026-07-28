@@ -1,5 +1,6 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
 import Layout from './components/Layout'
+import SettingsPage from './pages/SettingsPage'
 
 function Placeholder({ name }: { name: string }) {
   return (
@@ -17,7 +18,7 @@ export default function App() {
         <Route path="/workbench" element={<Placeholder name="识别工作台" />} />
         <Route path="/records" element={<Placeholder name="记录管理" />} />
         <Route path="/export" element={<Placeholder name="Excel 导出" />} />
-        <Route path="/settings" element={<Placeholder name="设置" />} />
+        <Route path="/settings" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/workbench" replace />} />
       </Route>
     </Routes>
