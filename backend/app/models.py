@@ -1,2 +1,217 @@
-"""空占位:models 在 M2 阶段实现。"""
-from app.database import Base  # noqa: F401
+"""ORM 模型定义。
+
+4 张表:
+  - app_settings: 单例配置(模型API + 提示词)
+  - excel_templates: Excel 模板配置
+  - specimen_records: 标本记录(含草稿状态机)
+  - taxonomy_cache: 分类缓存
+
+状态机(specimen_records.status):
+  uploaded -> extracting -> awaiting_confirmation -> classifying -> completed
+                                                                -> classification_failed
+                -> extraction_failed
+  awaiting_confirmation -> extracting  (重新识别)
+  任意非 completed 状态 -> discarded  (用户放弃草稿)
+
+参考清单第 5.1 节、第 7 节。
+"""
+from datetime import datetime
+
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Integer,
+    String,
+    Text,
+    func,
+)
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.database import Base
+
+
+# ============================================================
+# 状态常量(字符串,避免枚举在 JSON 序列化时的复杂性)
+# ============================================================
+
+# 记录状态:与清单 5.1 节一致 + discarded(用户决策:草稿放弃)
+STATUS_UPLOADED = "uploaded"
+STATUS_EXTRACTING = "extracting"
+STATUS_AWAITING_CONFIRMATION = "awaiting_confirmation"
+STATUS_CLASSIFYING = "classifying"
+STATUS_COMPLETED = "completed"
+STATUS_EXTRACTION_FAILED = "extraction_failed"
+STATUS_CLASSIFICATION_FAILED = "classification_failed"
+STATUS_DISCARDED = "discarded"
+
+# 尚未完成的活跃状态(用于前端恢复当前工作区草稿)
+ACTIVE_DRAFT_STATUSES = frozenset(
+    {
+        STATUS_UPLOADED,
+        STATUS_EXTRACTING,
+        STATUS_AWAITING_CONFIRMATION,
+        STATUS_CLASSIFYING,
+        STATUS_EXTRACTION_FAILED,
+    }
+)
+
+# 13 个目标字段列名(与 Excel 字段一一对应)
+FIELD_ZHONGMING = "中名"  # 中名
+FIELD_PHYLUM = "Phylum"
+FIELD_GANG = "纲"  # 纲
+FIELD_CLASS = "Class"
+FIELD_ORDER = "Order"
+FIELD_ZHONGWEN_KE = "中文科名"
+FIELD_KE = "科名"  # 科名
+FIELD_SHU = "属名"  # 属名
+FIELD_ZHONG = "种名"  # 种名
+FIELD_CHANDI3 = "产地3"
+FIELD_TUXIANG = "图像"  # 图像
+FIELD_CAIJIREN = "采集人"
+FIELD_CAIJI_RIQI = "采集日期"
+
+
+# ============================================================
+# 1. app_settings —— 单例配置
+# ============================================================
+
+class AppSettings(Base):
+    """应用配置单例。id 固定为 1。"""
+
+    __tablename__ = "app_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    base_url: Mapped[str] = mapped_column(String(500), default="")
+    api_key: Mapped[str] = mapped_column(String(500), default="")
+    model_name: Mapped[str] = mapped_column(String(200), default="")
+    recognition_prompt: Mapped[str] = mapped_column(Text, default="")
+    taxonomy_prompt: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        server_default=func.current_timestamp(),
+        onupdate=func.current_timestamp(),
+    )
+
+
+# ============================================================
+# 2. excel_templates —— Excel 模板配置
+# ============================================================
+
+class ExcelTemplate(Base):
+    """Excel 模板配置。同一时间只有一个 is_active=True。"""
+
+    __tablename__ = "excel_templates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    original_filename: Mapped[str] = mapped_column(String(500))
+    stored_path: Mapped[str] = mapped_column(String(1000))
+    target_sheet: Mapped[str] = mapped_column(String(200), default="")
+    header_row: Mapped[int] = mapped_column(Integer, default=1)
+    start_row: Mapped[int] = mapped_column(Integer, default=2)
+    # base_write_row 在保存映射时确定,预览和导出始终使用此值
+    base_write_row: Mapped[int] = mapped_column(Integer, default=2)
+    style_source_row: Mapped[int] = mapped_column(Integer, default=2)
+    # JSON: {"中名": "E", "Phylum": "G", ...}
+    field_mapping_json: Mapped[str] = mapped_column(Text, default="{}")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp()
+    )
+
+
+# ============================================================
+# 3. specimen_records —— 标本记录(含草稿)
+# ============================================================
+
+class SpecimenRecord(Base):
+    """标本记录。包含从上传到完成的完整生命周期。
+
+    草稿阶段(非 completed)的记录保存在此表,
+    通过 status 区分是否为草稿、是否已废弃。
+    """
+
+    __tablename__ = "specimen_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    # 图片信息
+    image_filename: Mapped[str] = mapped_column(String(500), default="")
+    image_path: Mapped[str] = mapped_column(String(1000), default="")
+    processed_image_path: Mapped[str] = mapped_column(String(1000), default="")
+    rotation_degrees: Mapped[int] = mapped_column(Integer, default=0)
+
+    # 状态
+    status: Mapped[str] = mapped_column(
+        String(50), default=STATUS_UPLOADED, index=True
+    )
+
+    # 模型原始响应与各阶段 JSON
+    raw_model_response: Mapped[str] = mapped_column(Text, default="")
+    extracted_draft_json: Mapped[str] = mapped_column(Text, default="")
+    confirmed_extraction_json: Mapped[str] = mapped_column(Text, default="")
+    taxonomy_result_json: Mapped[str] = mapped_column(Text, default="")
+    warnings_json: Mapped[str] = mapped_column(Text, default="[]")
+
+    # 13 个最终字段(扁平化,便于查询和排序)
+    zhongming: Mapped[str] = mapped_column(String(200), default="", index=True)
+    phylum: Mapped[str] = mapped_column(String(200), default="")
+    gang: Mapped[str] = mapped_column(String(200), default="")
+    klass: Mapped[str] = mapped_column(String(200), default="")  # Class 保留字
+    order_field: Mapped[str] = mapped_column(String(200), default="")  # order 保留字
+    zhongwen_ke: Mapped[str] = mapped_column(String(200), default="")
+    ke: Mapped[str] = mapped_column(String(200), default="")
+    shu: Mapped[str] = mapped_column(String(200), default="")
+    zhong: Mapped[str] = mapped_column(String(200), default="")
+    chandi3: Mapped[str] = mapped_column(String(500), default="")
+    tuxiang: Mapped[str] = mapped_column(String(200), default="", index=True)
+    caijiren: Mapped[str] = mapped_column(String(200), default="")
+    caiji_riqi: Mapped[str] = mapped_column(String(20), default="")
+
+    # 时间戳
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        server_default=func.current_timestamp(),
+        onupdate=func.current_timestamp(),
+    )
+
+
+# 注:completed 状态的"图像"编号部分唯一索引由 database.init_db() 显式创建,
+# 确保在文件数据库上也能正确生效。
+
+
+# ============================================================
+# 4. taxonomy_cache —— 分类缓存
+# ============================================================
+
+class TaxonomyCache(Base):
+    """已通过校验的中名 -> 分类信息缓存。
+
+    只有 8 个分类字段全部通过自动校验后才能写入或更新。
+    """
+
+    __tablename__ = "taxonomy_cache"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    zhongming: Mapped[str] = mapped_column(String(200), unique=True, index=True)
+    phylum: Mapped[str] = mapped_column(String(200), default="")
+    gang: Mapped[str] = mapped_column(String(200), default="")
+    klass: Mapped[str] = mapped_column(String(200), default="")
+    order_field: Mapped[str] = mapped_column(String(200), default="")
+    zhongwen_ke: Mapped[str] = mapped_column(String(200), default="")
+    ke: Mapped[str] = mapped_column(String(200), default="")
+    shu: Mapped[str] = mapped_column(String(200), default="")
+    zhong: Mapped[str] = mapped_column(String(200), default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        server_default=func.current_timestamp(),
+        onupdate=func.current_timestamp(),
+    )
