@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+venv/
+.venv/
+
+# Node
+node_modules/
+frontend/dist/
+
+# 数据(本地运行产物,不入库)
+data/templates/*.xlsx
+data/images/*
+data/processed_images/*
+data/exports/*
+data/*.db
+data/*.db-journal
+
+# 环境变量
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# Playwright MCP 临时产物
+.playwright-mcp/
+
+# 测试产物
+.coverage
+htmlcov/
+.pytest_cache/
+coverage/
