@@ -192,7 +192,12 @@ async def test_model(
     # 确定使用请求中的配置还是已保存配置
     s = _get_or_create_settings(db)
     base_url = (req.base_url or s.base_url).strip()
-    api_key = (req.api_key or s.api_key).strip()
+    # 如果 API Key 是掩码(含 *),用已保存的真实 Key
+    incoming_key = (req.api_key or "").strip()
+    if incoming_key and "*" not in incoming_key:
+        api_key = incoming_key
+    else:
+        api_key = s.api_key
     model_name = (req.model_name or s.model_name).strip()
 
     # 校验必填

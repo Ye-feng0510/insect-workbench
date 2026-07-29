@@ -65,12 +65,13 @@ export default function SettingsPage() {
     setTesting(true)
     setTestResult(null)
     try {
+      const originalKey = model.api_key
       // 先保存再测试
       const saved = await updateModelConfig(model)
       setModel(saved)
       const result = await testModel({
         base_url: saved.base_url,
-        api_key: saved.api_key,
+        api_key: originalKey,
         model_name: saved.model_name,
       })
       setTestResult(result)
