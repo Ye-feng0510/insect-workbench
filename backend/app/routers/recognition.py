@@ -8,11 +8,14 @@
 同步 HTTP 流程,不创建 job_id,不轮询。
 """
 import json
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
+from app.config import IMAGES_DIR
 from app.database import get_db
 from app.field_mapping import IMAGE_EXTRACTED_FIELDS
 from app.models import SpecimenRecord, STATUS_COMPLETED
@@ -25,6 +28,39 @@ from app.schemas import (
 from app.services import recognition_service as svc
 
 router = APIRouter(prefix="/api/recognition", tags=["recognition"])
+
+
+@router.get("/active-draft")
+async def get_active_draft(db: Session = Depends(get_db)) -> dict[str, Any] | None:
+    """获取当前活跃草稿(页面刷新后恢复用)。"""
+    record = svc.get_active_draft(db)
+    if record is None:
+        return None
+    return svc.record_to_detail(record)
+
+
+@router.post("/{record_id}/discard")
+async def discard_draft(
+    record_id: int,
+    db: Session = Depends(get_db),
+) -> dict[str, str]:
+    """放弃当前草稿。"""
+    record = db.get(SpecimenRecord, record_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="记录不存在")
+    svc.discard_draft(db, record)
+    return {"status": "discarded"}
+
+
+@router.get("/image/{filename}")
+async def get_image(filename: str):
+    """获取记录图片(原图)。"""
+    # 安全:防止路径穿越
+    safe_name = Path(filename).name
+    img_path = IMAGES_DIR / safe_name
+    if not img_path.exists():
+        raise HTTPException(status_code=404, detail="图片不存在")
+    return FileResponse(str(img_path))
 
 
 @router.post("/extract", response_model=ExtractResponse)
