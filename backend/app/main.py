@@ -12,6 +12,7 @@ from app.routers import templates as templates_router
 from app.routers import recognition as recognition_router
 from app.routers import excel_preview as excel_preview_router
 from app.routers import records as records_router
+from app.routers import export as export_router
 
 
 @asynccontextmanager
@@ -48,6 +49,7 @@ app.include_router(templates_router.router)
 app.include_router(recognition_router.router)
 app.include_router(excel_preview_router.router)
 app.include_router(records_router.router)
+app.include_router(export_router.router)
 
 
 # 生产模式: 若前端已构建,则由 FastAPI 托管静态文件
