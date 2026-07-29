@@ -2,7 +2,6 @@ import api from './api'
 import type {
   ModelConfig,
   PromptConfig,
-  TestModelRequest,
   TestModelResponse,
 } from '@/types'
 
@@ -26,7 +25,11 @@ export async function updatePrompts(config: PromptConfig): Promise<PromptConfig>
   return data
 }
 
-export async function testModel(req: TestModelRequest): Promise<TestModelResponse> {
+export async function testModel(req: {
+  base_url: string
+  api_key: string
+  model_name: string
+}): Promise<TestModelResponse> {
   const { data } = await api.post<TestModelResponse>('/settings/test-model', req)
   return data
 }

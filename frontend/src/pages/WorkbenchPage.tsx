@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import {
   Upload, ZoomIn, ZoomOut, RotateCw, RotateCcw, Loader2,
   CheckCircle, AlertCircle, RefreshCw, Trash2, Lock, Image as ImageIcon,
@@ -13,7 +13,7 @@ import {
   CONFIDENCE_LABELS, CONFIDENCE_COLORS,
   IMAGE_FIELDS,
 } from '@/lib/status'
-import type { ExtractResponse, RecordDetail } from '@/types'
+import type { RecordDetail } from '@/types'
 import ExcelPreview from '@/components/ExcelPreview'
 
 interface DraftData {

@@ -34,7 +34,7 @@ export default function TemplateSettings() {
   const [startRow, setStartRow] = useState(2)
   const [styleSourceRow, setStyleSourceRow] = useState(2)
   const [mapping, setMapping] = useState<Record<string, string>>({})
-  const [inspectResult, setInspectResult] = useState<InspectResult | null>(null)
+  const [, setInspectResult] = useState<InspectResult | null>(null)
   const [testResult, setTestResult] = useState<TestMappingResult | null>(null)
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)

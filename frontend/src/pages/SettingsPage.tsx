@@ -88,7 +88,7 @@ export default function SettingsPage() {
     setPrompts({ recognition_prompt: '', taxonomy_prompt: '' })
     // 保存空值让后端使用默认值
     try {
-      const saved = await updatePrompts({ recognition_prompt: '', taxonomy_prompt: '' })
+      await updatePrompts({ recognition_prompt: '', taxonomy_prompt: '' })
       const defaults = await getPrompts()
       setPrompts(defaults)
       show('已恢复默认提示词', 'success')

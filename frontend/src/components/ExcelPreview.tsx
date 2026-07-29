@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
-import { DataGrid, type Column, type RenderHeaderCellProps } from 'react-data-grid'
+import { DataGrid, type Column } from 'react-data-grid'
 import { Loader2, Columns3, List, RefreshCw, TableProperties } from 'lucide-react'
 import { useToast } from '@/components/Toast'
 import EmptyState from '@/components/EmptyState'
@@ -74,7 +74,7 @@ export default function ExcelPreview({ draftRow, highlightRow, autoScroll = true
       key: col.field,
       name: col.field,
       width: 120,
-      renderHeaderCell: (props: RenderHeaderCellProps<Row>) => (
+      renderHeaderCell: () => (
         <div className="flex flex-col">
           <span className="text-xs font-bold text-gray-500">{col.letter}</span>
           <span className="text-xs text-gray-700">{col.field}</span>
