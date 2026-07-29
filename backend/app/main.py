@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from app.config import FRONTEND_DIST, settings
 from app.database import init_db
 from app.routers import settings as settings_router
+from app.routers import templates as templates_router
 
 
 @asynccontextmanager
@@ -40,6 +41,7 @@ async def health() -> dict:
 
 # 注册路由
 app.include_router(settings_router.router)
+app.include_router(templates_router.router)
 
 
 # 生产模式: 若前端已构建,则由 FastAPI 托管静态文件
