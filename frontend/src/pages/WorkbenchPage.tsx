@@ -13,6 +13,7 @@ import {
   IMAGE_FIELDS,
 } from '@/lib/status'
 import type { ExtractResponse, RecordDetail } from '@/types'
+import ExcelPreview from '@/components/ExcelPreview'
 
 interface DraftData {
   recordId: number
@@ -515,6 +516,14 @@ export default function WorkbenchPage() {
             </p>
           </div>
         </div>
+      </div>
+
+      {/* Excel 实时预览区 */}
+      <div style={{ height: '35vh', minHeight: '200px' }}>
+        <ExcelPreview
+          draftRow={draft?.status === STATUS.AWAITING_CONFIRMATION ? draft.extracted : null}
+          highlightRow={highlightRow}
+        />
       </div>
 
       {/* 放弃草稿弹窗 */}

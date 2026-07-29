@@ -10,6 +10,7 @@ from app.database import init_db
 from app.routers import settings as settings_router
 from app.routers import templates as templates_router
 from app.routers import recognition as recognition_router
+from app.routers import excel_preview as excel_preview_router
 
 
 @asynccontextmanager
@@ -44,6 +45,7 @@ async def health() -> dict:
 app.include_router(settings_router.router)
 app.include_router(templates_router.router)
 app.include_router(recognition_router.router)
+app.include_router(excel_preview_router.router)
 
 
 # 生产模式: 若前端已构建,则由 FastAPI 托管静态文件
