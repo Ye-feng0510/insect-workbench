@@ -17,12 +17,14 @@ from app.database import get_db
 from app.models import AppSettings
 from app.schemas import (
     ModelConfig,
+    ModelsListRequest,
+    ModelsListResponse,
     PromptConfig,
     TestModelRequest,
     TestModelResponse,
     TestResult,
 )
-from app.services.model_provider import VisionModelClient
+from app.services.model_provider import ModelError, VisionModelClient
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -135,6 +137,46 @@ async def update_prompts(
         recognition_prompt=s.recognition_prompt,
         taxonomy_prompt=s.taxonomy_prompt,
     )
+
+
+# ============================================================
+# 获取可用模型列表
+# ============================================================
+
+@router.post("/models", response_model=ModelsListResponse)
+async def list_models(
+    req: ModelsListRequest,
+    db: Session = Depends(get_db),
+):
+    """根据 Base URL 和 API Key 获取可用模型列表。
+
+    前端填完 Base URL + API Key 后调用此接口获取下拉列表。
+    """
+    base_url = req.base_url.strip()
+    api_key = req.api_key.strip()
+
+    if not base_url:
+        raise HTTPException(status_code=400, detail="请先填写 Base URL")
+    if not api_key or "*" in api_key:
+        # 如果 API Key 是掩码(含 *),尝试用已保存的真实 Key
+        s = _get_or_create_settings(db)
+        api_key = s.api_key
+        if not api_key:
+            raise HTTPException(status_code=400, detail="请先填写 API Key")
+
+    if "/chat/completions" in base_url:
+        raise HTTPException(
+            status_code=400,
+            detail="Base URL 应填写 API 根地址(如 https://example.com/v1),不要包含 /chat/completions",
+        )
+
+    client = VisionModelClient(base_url, api_key, "")
+    try:
+        models = await client.list_models()
+    except ModelError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return ModelsListResponse(models=models)
 
 
 # ============================================================

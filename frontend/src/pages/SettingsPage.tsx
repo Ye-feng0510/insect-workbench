@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Save, Plug, RotateCcw, Loader2 } from 'lucide-react'
+import { Save, Plug, RotateCcw, Loader2, RefreshCw, ChevronDown } from 'lucide-react'
 import { useToast } from '@/components/Toast'
 import Loading from '@/components/Loading'
 import TemplateSettings from '@/components/TemplateSettings'
@@ -9,6 +9,7 @@ import {
   getPrompts,
   updatePrompts,
   testModel,
+  fetchModels,
 } from '@/services/settings'
 import type { ModelConfig, PromptConfig, TestModelResponse } from '@/types'
 import { extractErrorMessage } from '@/types'
@@ -22,6 +23,8 @@ export default function SettingsPage() {
   const [savingPrompts, setSavingPrompts] = useState(false)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<TestModelResponse | null>(null)
+  const [models, setModels] = useState<string[]>([])
+  const [fetchingModels, setFetchingModels] = useState(false)
 
   useEffect(() => {
     Promise.all([getModelConfig(), getPrompts()])
@@ -86,7 +89,6 @@ export default function SettingsPage() {
   const handleResetPrompts = async () => {
     if (!confirm('确定恢复默认提示词?当前编辑的内容将丢失。')) return
     setPrompts({ recognition_prompt: '', taxonomy_prompt: '' })
-    // 保存空值让后端使用默认值
     try {
       await updatePrompts({ recognition_prompt: '', taxonomy_prompt: '' })
       const defaults = await getPrompts()
@@ -94,6 +96,27 @@ export default function SettingsPage() {
       show('已恢复默认提示词', 'success')
     } catch (e) {
       show(extractErrorMessage(e, '恢复失败'), 'error')
+    }
+  }
+
+  const handleFetchModels = async () => {
+    if (!model.base_url) {
+      show('请先填写 Base URL', 'error')
+      return
+    }
+    setFetchingModels(true)
+    try {
+      const list = await fetchModels(model.base_url, model.api_key)
+      setModels(list)
+      // 如果当前没有选模型或不在列表中,自动选第一个
+      if (list.length > 0 && !list.includes(model.model_name)) {
+        setModel({ ...model, model_name: list[0] })
+      }
+      show(`获取到 ${list.length} 个模型`, 'success')
+    } catch (e) {
+      show(extractErrorMessage(e, '获取模型列表失败'), 'error')
+    } finally {
+      setFetchingModels(false)
     }
   }
 
@@ -133,14 +156,45 @@ export default function SettingsPage() {
             />
           </div>
           <div>
-            <label className="mb-1 block text-sm font-medium text-gray-600">模型名称</label>
-            <input
-              type="text"
-              value={model.model_name}
-              onChange={(e) => setModel({ ...model, model_name: e.target.value })}
-              placeholder="如 glm-4v-plus / qwen-vl-plus"
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-            />
+            <div className="mb-1 flex items-center justify-between">
+              <label className="block text-sm font-medium text-gray-600">模型名称</label>
+              <button
+                onClick={handleFetchModels}
+                disabled={fetchingModels || !model.base_url}
+                className="flex items-center gap-1 text-xs text-emerald-600 transition-colors hover:text-emerald-700 disabled:opacity-50"
+              >
+                {fetchingModels ? (
+                  <><Loader2 className="h-3 w-3 animate-spin" /> 获取中...</>
+                ) : (
+                  <><RefreshCw className="h-3 w-3" /> 获取模型列表</>
+                )}
+              </button>
+            </div>
+            {models.length > 0 ? (
+              <div className="relative">
+                <select
+                  value={model.model_name}
+                  onChange={(e) => setModel({ ...model, model_name: e.target.value })}
+                  className="w-full appearance-none rounded-lg border border-gray-300 px-3 py-2 pr-8 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                >
+                  {model.model_name && !models.includes(model.model_name) && (
+                    <option value={model.model_name}>{model.model_name} (当前)</option>
+                  )}
+                  {models.map((m) => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+              </div>
+            ) : (
+              <input
+                type="text"
+                value={model.model_name}
+                onChange={(e) => setModel({ ...model, model_name: e.target.value })}
+                placeholder="点击右上角获取模型列表, 或手动输入模型名称"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+              />
+            )}
           </div>
 
           {testResult && (

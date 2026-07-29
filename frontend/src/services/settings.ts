@@ -1,6 +1,7 @@
 import api from './api'
 import type {
   ModelConfig,
+  ModelsListResponse,
   PromptConfig,
   TestModelResponse,
 } from '@/types'
@@ -32,4 +33,9 @@ export async function testModel(req: {
 }): Promise<TestModelResponse> {
   const { data } = await api.post<TestModelResponse>('/settings/test-model', req)
   return data
+}
+
+export async function fetchModels(base_url: string, api_key: string): Promise<string[]> {
+  const { data } = await api.post<ModelsListResponse>('/settings/models', { base_url, api_key })
+  return data.models
 }

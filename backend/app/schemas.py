@@ -44,6 +44,17 @@ class TestModelResponse(BaseModel):
     overall: bool
 
 
+class ModelsListRequest(BaseModel):
+    """获取模型列表请求。"""
+    base_url: str
+    api_key: str
+
+
+class ModelsListResponse(BaseModel):
+    """获取模型列表响应。"""
+    models: list[str]
+
+
 # ============================================================
 # Excel 模板
 # ============================================================

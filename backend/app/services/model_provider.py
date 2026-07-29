@@ -46,11 +46,48 @@ class VisionModelClient:
         return f"{self.base_url}/chat/completions"
 
     @property
+    def _models_url(self) -> str:
+        """拼接 models 列表接口地址。"""
+        return f"{self.base_url}/models"
+
+    @property
     def _headers(self) -> dict[str, str]:
         return {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
+
+    # ============================================================
+    # 获取可用模型列表
+    # ============================================================
+
+    async def list_models(self) -> list[str]:
+        """调用 GET /models 获取该 API Key 下所有可用模型名称。
+
+        返回按字母排序的模型 ID 列表。
+        """
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.get(self._models_url, headers=self._headers)
+        except (httpx.TimeoutException, httpx.ConnectError) as e:
+            raise ModelError(f"连接失败,请检查 Base URL: {e}") from e
+
+        if resp.status_code == 401:
+            raise ModelError("API Key 无效或未授权")
+        if resp.status_code == 404:
+            raise ModelError("Base URL 不是 API 根地址,无法找到 /models 接口")
+        if resp.status_code != 200:
+            raise ModelError(f"获取模型列表失败: HTTP {resp.status_code}: {resp.text[:300]}")
+
+        try:
+            data = resp.json()
+            models = data.get("data", [])
+            ids = sorted(m["id"] for m in models if "id" in m)
+            if not ids:
+                raise ModelError("API 返回了空模型列表")
+            return ids
+        except (json.JSONDecodeError, KeyError) as e:
+            raise ModelError(f"解析模型列表失败: {e}") from e
 
     # ============================================================
     # 核心调用

@@ -22,6 +22,10 @@ export interface TestModelResponse {
   overall: boolean
 }
 
+export interface ModelsListResponse {
+  models: string[]
+}
+
 export interface SheetInfo {
   name: string
   rows: number
