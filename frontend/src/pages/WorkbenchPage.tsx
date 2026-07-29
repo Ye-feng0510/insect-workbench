@@ -4,6 +4,7 @@ import {
   CheckCircle, AlertCircle, RefreshCw, Trash2, Lock, Image as ImageIcon,
 } from 'lucide-react'
 import { useToast } from '@/components/Toast'
+import Loading from '@/components/Loading'
 import { extractImage, reExtract, confirmExtraction } from '@/services/recognition'
 import { getActiveDraft, discardDraft, imageUrl } from '@/services/draft'
 import { extractErrorMessage } from '@/types'
@@ -238,11 +239,7 @@ export default function WorkbenchPage() {
   const canConfirm = draft?.status === STATUS.AWAITING_CONFIRMATION && !zhongmingEmpty && !tuxiangEmpty && !confirming
 
   if (loading) {
-    return (
-      <div className="flex h-full items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin text-emerald-600" />
-      </div>
-    )
+    return <Loading />
   }
 
   return (

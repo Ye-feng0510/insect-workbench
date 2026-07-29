@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react'
 import {
   Search, Filter, Edit2, Trash2, RefreshCw, Eye, Loader2,
-  X, Save, AlertCircle,
+  X, Save, AlertCircle, Inbox,
 } from 'lucide-react'
 import { useToast } from '@/components/Toast'
+import Loading from '@/components/Loading'
+import EmptyState from '@/components/EmptyState'
 import {
   listRecords, updateRecord, deleteRecord, reclassifyRecord,
 } from '@/services/records'
@@ -145,12 +147,14 @@ export default function RecordsPage() {
 
       {/* 记录列表 */}
       {loading ? (
-        <div className="flex items-center justify-center py-12">
-          <Loader2 className="h-6 w-6 animate-spin text-emerald-600" />
-        </div>
+        <Loading />
       ) : records.length === 0 ? (
-        <div className="rounded-xl border border-gray-200 bg-white py-12 text-center text-gray-400">
-          暂无记录
+        <div className="rounded-xl border border-gray-200 bg-white">
+          <EmptyState
+            icon={<Inbox className="h-12 w-12" />}
+            title={search || statusFilter ? '没有匹配的记录' : '暂无记录'}
+            description={search || statusFilter ? '尝试修改搜索条件或筛选状态' : '在识别工作台完成图片识别后,记录将显示在这里'}
+          />
         </div>
       ) : (
         <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white">

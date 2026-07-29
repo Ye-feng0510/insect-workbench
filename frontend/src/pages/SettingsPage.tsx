@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Save, Plug, RotateCcw, Loader2 } from 'lucide-react'
 import { useToast } from '@/components/Toast'
+import Loading from '@/components/Loading'
 import TemplateSettings from '@/components/TemplateSettings'
 import {
   getModelConfig,
@@ -97,11 +98,7 @@ export default function SettingsPage() {
   }
 
   if (loading) {
-    return (
-      <div className="flex h-full items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin text-emerald-600" />
-      </div>
-    )
+    return <Loading />
   }
 
   return (

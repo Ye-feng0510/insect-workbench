@@ -1,5 +1,8 @@
+import { useState, useEffect } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
-import { Microscope, Table, Download, Settings } from 'lucide-react'
+import { Microscope, Table, Download, Settings, CheckCircle, XCircle } from 'lucide-react'
+import { getModelConfig } from '@/services/settings'
+import { getCurrentTemplate } from '@/services/templates'
 
 const navItems = [
   { to: '/workbench', label: '识别工作台', icon: Microscope },
@@ -8,10 +11,46 @@ const navItems = [
   { to: '/settings', label: '设置', icon: Settings },
 ]
 
+interface StatusBadgeProps {
+  ok: boolean
+  label: string
+}
+
+function StatusBadge({ ok, label }: StatusBadgeProps) {
+  return (
+    <span className="flex items-center gap-1">
+      {ok ? (
+        <CheckCircle className="h-3 w-3 text-emerald-500" />
+      ) : (
+        <XCircle className="h-3 w-3 text-gray-300" />
+      )}
+      <span className={ok ? 'text-emerald-600' : 'text-gray-400'}>{label}</span>
+    </span>
+  )
+}
+
 export default function Layout() {
+  const [modelConfigured, setModelConfigured] = useState(false)
+  const [templateConfigured, setTemplateConfigured] = useState(false)
+
+  useEffect(() => {
+    // 并行检查配置状态,失败时静默处理
+    Promise.allSettled([
+      getModelConfig(),
+      getCurrentTemplate(),
+    ]).then(([modelRes, tplRes]) => {
+      if (modelRes.status === 'fulfilled') {
+        setModelConfigured(!!modelRes.value.base_url && !!modelRes.value.model_name)
+      }
+      if (tplRes.status === 'fulfilled' && tplRes.value) {
+        setTemplateConfigured(tplRes.value.is_active)
+      }
+    })
+  }, [])
+
   return (
     <div className="flex h-screen bg-gray-50 text-gray-800">
-      <aside className="flex w-60 flex-col border-r border-gray-200 bg-white">
+      <aside className="flex w-60 shrink-0 flex-col border-r border-gray-200 bg-white">
         <div className="flex items-center gap-2 border-b border-gray-200 px-5 py-4">
           <Microscope className="h-6 w-6 text-emerald-600" />
           <span className="text-base font-semibold">昆虫标本工作台</span>
@@ -34,10 +73,17 @@ export default function Layout() {
             </NavLink>
           ))}
         </nav>
-        <div className="border-t border-gray-200 px-5 py-3 text-xs text-gray-400">
-          <p>模板: <span className="text-gray-500">未加载</span></p>
-          <p>模型: <span className="text-gray-500">未配置</span></p>
-          <p>API: <span className="text-gray-400">未知</span></p>
+        <div className="space-y-1.5 border-t border-gray-200 px-5 py-3 text-xs">
+          <StatusBadge ok={templateConfigured} label="Excel 模板" />
+          <StatusBadge ok={modelConfigured} label="模型 API" />
+          {!modelConfigured || !templateConfigured ? (
+            <NavLink
+              to="/settings"
+              className="mt-1 block text-xs text-blue-500 hover:underline"
+            >
+              前往设置 &rarr;
+            </NavLink>
+          ) : null}
         </div>
       </aside>
       <main className="flex-1 overflow-auto p-6">

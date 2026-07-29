@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { DataGrid, type Column, type RenderHeaderCellProps } from 'react-data-grid'
-import { Loader2, Columns3, List, RefreshCw } from 'lucide-react'
+import { Loader2, Columns3, List, RefreshCw, TableProperties } from 'lucide-react'
 import { useToast } from '@/components/Toast'
+import EmptyState from '@/components/EmptyState'
 import { getPreview } from '@/services/preview'
 import { extractErrorMessage } from '@/types'
 import type { PreviewResponse } from '@/types'
@@ -165,8 +166,12 @@ export default function ExcelPreview({ draftRow, highlightRow, autoScroll = true
 
   if (!data) {
     return (
-      <div className="py-8 text-center text-sm text-gray-400">
-        请先在设置页面配置 Excel 模板
+      <div className="rounded-xl border border-gray-200 bg-white">
+        <EmptyState
+          icon={<TableProperties className="h-10 w-10" />}
+          title="尚未配置 Excel 模板"
+          description="请先在设置页面上传模板并配置字段映射"
+        />
       </div>
     )
   }

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Download, FileSpreadsheet, Loader2, CheckCircle, AlertCircle } from 'lucide-react'
 import { useToast } from '@/components/Toast'
+import Loading from '@/components/Loading'
 import { getExportSummary, exportExcel } from '@/services/export'
 import { extractErrorMessage, type ExportSummary } from '@/types'
 
@@ -41,11 +42,7 @@ export default function ExportPage() {
   }
 
   if (loading) {
-    return (
-      <div className="flex h-full items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin text-emerald-600" />
-      </div>
-    )
+    return <Loading />
   }
 
   return (
