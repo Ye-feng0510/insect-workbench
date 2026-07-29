@@ -1,0 +1,50 @@
+# 版本控制和 IDE
+.git
+.gitignore
+.vscode
+.idea
+*.swp
+
+# Python
+backend/__pycache__
+backend/**/__pycache__
+backend/venv
+backend/.venv
+*.pyc
+backend/.pytest_cache
+backend/tests
+
+# Node
+frontend/node_modules
+frontend/.vitest
+
+# 数据(本地运行产物,容器内自动生成)
+data/
+
+# 构建产物(容器内重新构建)
+frontend/dist
+
+# 环境变量(用户自行创建)
+.env
+.env.local
+
+# Playwright / 测试截图
+.playwright-mcp
+*.png
+
+# 文档
+README.md
+*.md
+LICENSE
+
+# 脚本(容器内不需要)
+scripts/
+
+# 操作系统
+.DS_Store
+Thumbs.db
+
+# Docker 自身
+Dockerfile
+docker-compose.yml
+.dockerignore

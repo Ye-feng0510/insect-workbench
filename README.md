@@ -51,7 +51,32 @@ git clone https://github.com/Ye-feng0510/insect-workbench.git
 cd insect-workbench
 ```
 
-### 2. 一键启动(推荐)
+### 2. Docker 启动(推荐)
+
+只需安装 [Docker Desktop](https://www.docker.com/products/docker-desktop/),无需配置 Python / Node.js 环境:
+
+```bash
+docker compose up -d --build
+```
+
+首次构建约 2-3 分钟(下载镜像 + 安装依赖 + 构建前端)。后续启动秒级完成。
+
+启动后访问: **http://127.0.0.1:8000**
+
+```bash
+# 查看日志
+docker compose logs -f
+
+# 停止
+docker compose down
+
+# 重新构建(代码更新后)
+docker compose up -d --build
+```
+
+> 数据持久化: 容器的 `data/` 目录映射到宿主机的 `./data/`,数据库、模板、图片、导出文件均保存在宿主机,容器删除后数据不丢失。
+
+### 3. 脚本启动(无需 Docker)
 
 **Windows:**
 
@@ -75,7 +100,7 @@ chmod +x scripts/start.sh
 
 > 停止服务: 按 `Ctrl + C`
 
-### 3. 手动启动(开发模式)
+### 4. 手动启动(开发模式)
 
 如果需要前后端独立运行(热更新),可分别启动:
 
