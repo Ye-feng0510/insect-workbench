@@ -4,6 +4,7 @@ import SettingsPage from './pages/SettingsPage'
 import WorkbenchPage from './pages/WorkbenchPage'
 import RecordsPage from './pages/RecordsPage'
 import ExportPage from './pages/ExportPage'
+import MaterialsPage from './pages/MaterialsPage'
 
 export default function App() {
   return (
@@ -11,6 +12,7 @@ export default function App() {
       <Route element={<Layout />}>
         <Route index element={<Navigate to="/workbench" replace />} />
         <Route path="/workbench" element={<WorkbenchPage />} />
+        <Route path="/materials" element={<MaterialsPage />} />
         <Route path="/records" element={<RecordsPage />} />
         <Route path="/export" element={<ExportPage />} />
         <Route path="/settings" element={<SettingsPage />} />

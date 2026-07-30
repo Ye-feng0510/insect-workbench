@@ -1,10 +1,12 @@
 """ORM 模型定义。
 
-4 张表:
+6 张表:
   - app_settings: 单例配置(模型API + 提示词)
   - excel_templates: Excel 模板配置
   - specimen_records: 标本记录(含草稿状态机)
   - taxonomy_cache: 分类缓存
+  - material_batches: 数据素材压缩包批次
+  - material_items: 批次中的单张素材图片
 
 状态机(specimen_records.status):
   uploaded -> extracting -> awaiting_confirmation -> classifying -> completed
@@ -20,6 +22,7 @@ from datetime import datetime
 from sqlalchemy import (
     Boolean,
     DateTime,
+    ForeignKey,
     Integer,
     String,
     Text,
@@ -43,6 +46,13 @@ STATUS_COMPLETED = "completed"
 STATUS_EXTRACTION_FAILED = "extraction_failed"
 STATUS_CLASSIFICATION_FAILED = "classification_failed"
 STATUS_DISCARDED = "discarded"
+
+# 素材图片状态
+MATERIAL_STATUS_PENDING = "pending"
+MATERIAL_STATUS_PROCESSING = "processing"
+MATERIAL_STATUS_COMPLETED = "completed"
+MATERIAL_STATUS_SKIPPED = "skipped"
+MATERIAL_STATUS_FAILED = "failed"
 
 # 尚未完成的活跃状态(用于前端恢复当前工作区草稿)
 ACTIVE_DRAFT_STATUSES = frozenset(
@@ -207,6 +217,67 @@ class TaxonomyCache(Base):
     ke: Mapped[str] = mapped_column(String(200), default="")
     shu: Mapped[str] = mapped_column(String(200), default="")
     zhong: Mapped[str] = mapped_column(String(200), default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        server_default=func.current_timestamp(),
+        onupdate=func.current_timestamp(),
+    )
+
+
+# ============================================================
+# 5. material_batches —— 数据素材批次
+# ============================================================
+
+class MaterialBatch(Base):
+    """用户上传的数据素材 ZIP 批次。一次只有一个活跃批次。"""
+
+    __tablename__ = "material_batches"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    original_filename: Mapped[str] = mapped_column(String(500))
+    stored_zip_path: Mapped[str] = mapped_column(String(1000))
+    extract_dir: Mapped[str] = mapped_column(String(1000))
+    total_count: Mapped[int] = mapped_column(Integer, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        server_default=func.current_timestamp(),
+        onupdate=func.current_timestamp(),
+    )
+
+
+# ============================================================
+# 6. material_items —— 单张数据素材图片
+# ============================================================
+
+class MaterialItem(Base):
+    """素材批次中的图片及其处理状态。"""
+
+    __tablename__ = "material_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    batch_id: Mapped[int] = mapped_column(
+        ForeignKey("material_batches.id", ondelete="CASCADE"), index=True
+    )
+    sequence: Mapped[int] = mapped_column(Integer)
+    original_filename: Mapped[str] = mapped_column(String(500))
+    archive_path: Mapped[str] = mapped_column(String(1000))
+    stored_path: Mapped[str] = mapped_column(String(1000))
+    status: Mapped[str] = mapped_column(
+        String(50), default=MATERIAL_STATUS_PENDING, index=True
+    )
+    record_id: Mapped[int | None] = mapped_column(
+        ForeignKey("specimen_records.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    error_message: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.current_timestamp()
     )

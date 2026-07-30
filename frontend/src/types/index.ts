@@ -102,6 +102,49 @@ export interface RecordDetail {
   fields: Record<string, string>
   created_at: string
   updated_at: string
+  material_item_id?: number
+  material_batch_id?: number
+}
+
+export type MaterialStatus = 'pending' | 'processing' | 'completed' | 'skipped' | 'failed'
+
+export interface MaterialBatchInfo {
+  id: number
+  original_filename: string
+  total_count: number
+  is_active: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface MaterialItemInfo {
+  id: number
+  batch_id: number
+  sequence: number
+  original_filename: string
+  archive_path: string
+  status: MaterialStatus
+  record_id: number | null
+  error_message: string
+  created_at: string
+  updated_at: string
+}
+
+export interface MaterialSummary {
+  batch: MaterialBatchInfo | null
+  total_count: number
+  pending_count: number
+  processing_count: number
+  completed_count: number
+  skipped_count: number
+  failed_count: number
+}
+
+export interface MaterialExtractResponse extends ExtractResponse {
+  material_item_id: number
+  batch_id: number
+  original_filename: string
+  pending_count: number
 }
 
 export interface PreviewColumn {

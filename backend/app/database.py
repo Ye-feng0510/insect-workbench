@@ -1,7 +1,7 @@
 """数据库会话与初始化。SQLite,单文件。"""
 from collections.abc import Generator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.config import DB_PATH, ensure_dirs
@@ -15,6 +15,13 @@ engine = create_engine(
     connect_args={"check_same_thread": False},
     echo=False,
 )
+
+
+@event.listens_for(engine, "connect")
+def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record) -> None:
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
@@ -47,6 +54,12 @@ def init_db() -> None:
             text(
                 "CREATE UNIQUE INDEX IF NOT EXISTS uq_specimen_tuxiang_completed "
                 "ON specimen_records (tuxiang) WHERE status = 'completed'"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_material_queue "
+                "ON material_items (batch_id, status, sequence)"
             )
         )
         conn.commit()

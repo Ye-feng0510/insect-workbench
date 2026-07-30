@@ -18,6 +18,7 @@ from app.field_mapping import FIELD_TO_COLUMN, TAXONOMY_FIELDS, IMAGE_EXTRACTED_
 from app.models import SpecimenRecord, STATUS_COMPLETED
 from app.schemas import RecordDetail, RecordSummary, RecordUpdate
 from app.services import recognition_service as svc
+from app.services import materials_service
 
 router = APIRouter(prefix="/api/records", tags=["records"])
 
@@ -122,6 +123,7 @@ async def delete_record(
         if proc_file.exists():
             proc_file.unlink(missing_ok=True)
 
+    materials_service.reset_item_for_deleted_record(db, record_id)
     db.delete(record)
     db.commit()
     return {"status": "deleted"}
@@ -149,8 +151,14 @@ async def reclassify_record(
         )
 
     confirmed = confirmed_data["confirmed"]
+    material_item = materials_service.get_linked_item(db, record_id)
     result = await svc.confirm_and_classify(
-        db, record, confirmed, duplicate_action="replace", existing_record=None
+        db,
+        record,
+        confirmed,
+        duplicate_action="replace",
+        existing_record=None,
+        material_item=material_item,
     )
 
     # 计算 Excel 行号

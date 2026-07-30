@@ -2,18 +2,24 @@ import { useState, useEffect, useRef } from 'react'
 import {
   Upload, ZoomIn, ZoomOut, RotateCw, RotateCcw, Loader2,
   CheckCircle, AlertCircle, RefreshCw, Trash2, Lock, Image as ImageIcon,
+  ListStart, SkipForward,
 } from 'lucide-react'
 import { useToast } from '@/components/Toast'
 import Loading from '@/components/Loading'
 import { extractImage, reExtract, confirmExtraction } from '@/services/recognition'
 import { getActiveDraft, discardDraft, imageUrl } from '@/services/draft'
+import {
+  extractNextMaterial,
+  getMaterialSummary,
+  skipMaterial,
+} from '@/services/materials'
 import { extractErrorMessage } from '@/types'
 import {
   STATUS, ACTIVE_DRAFT_STATUSES, STATUS_LABELS, STATUS_COLORS,
   CONFIDENCE_LABELS, CONFIDENCE_COLORS,
   IMAGE_FIELDS,
 } from '@/lib/status'
-import type { RecordDetail } from '@/types'
+import type { MaterialSummary, RecordDetail } from '@/types'
 import ExcelPreview from '@/components/ExcelPreview'
 
 interface DraftData {
@@ -25,6 +31,8 @@ interface DraftData {
   extracted: Record<string, string>
   confidence: Record<string, string>
   warnings: string[]
+  materialItemId?: number
+  materialBatchId?: number
 }
 
 export default function WorkbenchPage() {
@@ -39,6 +47,9 @@ export default function WorkbenchPage() {
   const [showDiscardDialog, setShowDiscardDialog] = useState(false)
   const [pendingFile, setPendingFile] = useState<File | null>(null)
   const [highlightRow, setHighlightRow] = useState<number | null>(null)
+  const [materialSummary, setMaterialSummary] = useState<MaterialSummary | null>(null)
+  const [queueLoading, setQueueLoading] = useState(false)
+  const [skipping, setSkipping] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
   // 页面加载时恢复草稿
@@ -49,14 +60,18 @@ export default function WorkbenchPage() {
   const loadDraft = async () => {
     setLoading(true)
     try {
-      const detail = await getActiveDraft()
+      const [detail, summary] = await Promise.all([
+        getActiveDraft(),
+        getMaterialSummary().catch(() => null),
+      ])
+      setMaterialSummary(summary)
       if (detail && ACTIVE_DRAFT_STATUSES.includes(detail.status as never)) {
         const draftData = parseDetailToDraft(detail)
         setDraft(draftData)
         setRotation(draftData.rotation)
         show('已恢复未完成的草稿', 'info')
       }
-    } catch (e) {
+    } catch {
       // 静默忽略
     } finally {
       setLoading(false)
@@ -76,6 +91,8 @@ export default function WorkbenchPage() {
       extracted,
       confidence,
       warnings,
+      materialItemId: detail.material_item_id,
+      materialBatchId: detail.material_batch_id,
     }
   }
 
@@ -120,6 +137,44 @@ export default function WorkbenchPage() {
     }
   }
 
+  const startNextMaterial = async () => {
+    setQueueLoading(true)
+    setExtracting(true)
+    try {
+      const result = await extractNextMaterial()
+      setDraft({
+        recordId: result.record_id,
+        status: result.status,
+        imageFilename: result.original_filename,
+        imagePath: '',
+        rotation: 0,
+        extracted: result.extracted,
+        confidence: result.confidence,
+        warnings: result.warnings,
+        materialItemId: result.material_item_id,
+        materialBatchId: result.batch_id,
+      })
+      setOriginalFile(null)
+      setZoom(1)
+      setRotation(0)
+      const [detail, summary] = await Promise.all([
+        getActiveDraft(),
+        getMaterialSummary(),
+      ])
+      if (detail) {
+        setDraft(parseDetailToDraft(detail))
+      }
+      setMaterialSummary(summary)
+      show('素材图片识别完成,请核查确认', 'success')
+    } catch (e) {
+      show(extractErrorMessage(e, '加载下一张素材失败'), 'error')
+      await loadDraft()
+    } finally {
+      setQueueLoading(false)
+      setExtracting(false)
+    }
+  }
+
   const handleReExtract = async () => {
     if (!draft) return
     setExtracting(true)
@@ -140,6 +195,32 @@ export default function WorkbenchPage() {
     }
   }
 
+  const finishCompletedRecord = async (excelRow: number, message: string) => {
+    show(message, 'success')
+    setHighlightRow(excelRow)
+    setDraft(prev => prev ? { ...prev, status: STATUS.COMPLETED } : null)
+    if (!draft?.materialItemId) {
+      setTimeout(() => clearWorkbench(), 2000)
+      return
+    }
+
+    try {
+      const summary = await getMaterialSummary()
+      setMaterialSummary(summary)
+      clearWorkbench()
+      setHighlightRow(excelRow)
+      if (summary.pending_count > 0) {
+        await startNextMaterial()
+      } else {
+        show('当前素材包已处理完毕', 'success')
+      }
+    } catch {
+      clearWorkbench()
+      setHighlightRow(excelRow)
+      show('记录已完成,但素材进度刷新失败', 'error')
+    }
+  }
+
   const handleConfirm = async () => {
     if (!draft) return
     const zhongming = draft.extracted['中名']?.trim()
@@ -156,12 +237,10 @@ export default function WorkbenchPage() {
     try {
       const result = await confirmExtraction(draft.recordId, draft.extracted)
       if (result.status === STATUS.COMPLETED) {
-        show(`已写入 Excel 第 ${result.excel_row} 行`, 'success')
-        setHighlightRow(result.excel_row)
-        // 2 秒后自动清空,进入下一张
-        setTimeout(() => {
-          clearWorkbench()
-        }, 2000)
+        await finishCompletedRecord(
+          result.excel_row,
+          `已写入 Excel 第 ${result.excel_row} 行`,
+        )
       } else if (result.status === STATUS.CLASSIFICATION_FAILED) {
         show('分类校验失败,可在记录管理中重试分类', 'error')
         setDraft(prev => prev ? { ...prev, status: result.status } : null)
@@ -180,9 +259,10 @@ export default function WorkbenchPage() {
             // 用户选择覆盖,重新提交
             const result = await confirmExtraction(draft.recordId, draft.extracted, 'replace')
             if (result.status === STATUS.COMPLETED) {
-              show(`已覆盖并写入 Excel 第 ${result.excel_row} 行`, 'success')
-              setHighlightRow(result.excel_row)
-              setTimeout(() => clearWorkbench(), 2000)
+              await finishCompletedRecord(
+                result.excel_row,
+                `已覆盖并写入 Excel 第 ${result.excel_row} 行`,
+              )
             }
           } else {
             show('已取消,当前草稿保留', 'info')
@@ -212,11 +292,37 @@ export default function WorkbenchPage() {
       clearWorkbench()
       return
     }
+    if (draft.status === STATUS.COMPLETED) return
     if (!confirm('确定清空当前图片?未确认的草稿将被放弃。')) return
-    discardDraft(draft.recordId).then(() => {
+    discardDraft(draft.recordId).then(async () => {
+      setMaterialSummary(await getMaterialSummary().catch(() => materialSummary))
       clearWorkbench()
       show('已清空', 'info')
     })
+  }
+
+  const handleSkipMaterial = async () => {
+    if (
+      !draft?.materialItemId
+      || draft.status === STATUS.COMPLETED
+      || skipping
+    ) return
+    setSkipping(true)
+    try {
+      const summary = await skipMaterial(draft.materialItemId)
+      setMaterialSummary(summary)
+      clearWorkbench()
+      show('已跳过当前素材', 'info')
+      if (summary.pending_count > 0) {
+        await startNextMaterial()
+      } else {
+        show('当前素材包已处理完毕', 'success')
+      }
+    } catch (e) {
+      show(extractErrorMessage(e, '跳过素材失败'), 'error')
+    } finally {
+      setSkipping(false)
+    }
   }
 
   const handleRotate = (dir: 'cw' | 'ccw') => {
@@ -269,7 +375,34 @@ export default function WorkbenchPage() {
                 }}
                 className="flex h-full w-full cursor-pointer flex-col items-center justify-center gap-3 border-2 border-dashed border-gray-300 rounded-lg transition-colors hover:border-emerald-400 hover:bg-emerald-50/30"
               >
-                <Upload className="h-12 w-12 text-emerald-500" />
+                {materialSummary?.batch && materialSummary.pending_count > 0 ? (
+                  <div
+                    onClick={(event) => event.stopPropagation()}
+                    className="mb-2 flex flex-col items-center gap-2 rounded-lg bg-emerald-50 px-6 py-3"
+                  >
+                    <div className="flex items-center gap-2 text-sm font-medium text-emerald-700">
+                      <ListStart className="h-4 w-4" />
+                      当前素材包还有 {materialSummary.pending_count} 张待处理
+                    </div>
+                    <button
+                      onClick={startNextMaterial}
+                      disabled={queueLoading}
+                      className="flex items-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+                    >
+                      {queueLoading ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <ListStart className="h-4 w-4" />
+                      )}
+                      开始处理下一张素材
+                    </button>
+                  </div>
+                ) : materialSummary?.batch && materialSummary.total_count > 0 ? (
+                  <p className="rounded-lg bg-gray-100 px-4 py-2 text-xs text-gray-500">
+                    当前素材包暂无待处理图片
+                  </p>
+                ) : null}
+                <Upload className="h-10 w-10 text-emerald-500" />
                 <p className="text-sm font-medium text-gray-600">点击或拖拽上传昆虫标本图片</p>
                 <p className="text-xs text-gray-400">支持 JPG / JPEG / PNG / WebP</p>
               </div>
@@ -361,9 +494,29 @@ export default function WorkbenchPage() {
                     重新识别
                   </button>
                 )}
+                {draft.materialItemId && (
+                  <button
+                    onClick={handleSkipMaterial}
+                    disabled={
+                      draft.status === STATUS.COMPLETED
+                      || skipping
+                      || confirming
+                      || extracting
+                    }
+                    className="flex items-center gap-1.5 rounded-md border border-amber-300 px-3 py-1.5 text-xs text-amber-600 hover:bg-amber-50 disabled:opacity-50"
+                  >
+                    {skipping ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <SkipForward className="h-3.5 w-3.5" />
+                    )}
+                    跳过当前素材
+                  </button>
+                )}
                 <button
                   onClick={handleClear}
-                  className="flex items-center gap-1.5 rounded-md border border-red-200 px-3 py-1.5 text-xs text-red-500 hover:bg-red-50"
+                  disabled={draft.status === STATUS.COMPLETED}
+                  className="flex items-center gap-1.5 rounded-md border border-red-200 px-3 py-1.5 text-xs text-red-500 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
                   清空
@@ -373,10 +526,17 @@ export default function WorkbenchPage() {
           )}
 
           {draft && (
-            <p className="mt-1 truncate text-xs text-gray-400">
-              <ImageIcon className="mr-1 inline h-3 w-3" />
-              {draft.imageFilename} (旋转 {rotation}°)
-            </p>
+            <div className="mt-1 flex items-center gap-2 text-xs text-gray-400">
+              <p className="min-w-0 flex-1 truncate">
+                <ImageIcon className="mr-1 inline h-3 w-3" />
+                {draft.imageFilename} (旋转 {rotation}°)
+              </p>
+              {draft.materialItemId ? (
+                <span className="shrink-0 rounded bg-emerald-50 px-2 py-0.5 text-emerald-600">
+                  素材队列
+                </span>
+              ) : null}
+            </div>
           )}
         </div>
 
@@ -545,6 +705,7 @@ export default function WorkbenchPage() {
                 onClick={async () => {
                   if (draft) {
                     await discardDraft(draft.recordId)
+                    setMaterialSummary(await getMaterialSummary().catch(() => materialSummary))
                   }
                   setShowDiscardDialog(false)
                   clearWorkbench()

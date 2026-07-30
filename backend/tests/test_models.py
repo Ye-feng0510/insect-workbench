@@ -11,6 +11,8 @@ from app import models
 from app.models import (
     AppSettings,
     ExcelTemplate,
+    MaterialBatch,
+    MaterialItem,
     SpecimenRecord,
     TaxonomyCache,
     STATUS_COMPLETED,
@@ -52,6 +54,8 @@ class TestTableCreation:
         assert "excel_templates" in tables
         assert "specimen_records" in tables
         assert "taxonomy_cache" in tables
+        assert "material_batches" in tables
+        assert "material_items" in tables
 
     def test_specimen_records_has_13_fields(self, db_session):
         """记录表包含全部 13 个目标字段列。"""
@@ -77,6 +81,35 @@ class TestTableCreation:
         assert loaded.zhongming == "二点红蝽"
         assert loaded.tuxiang == "PSZP-00842"
         assert loaded.caiji_riqi == "2009-10-24"
+
+    def test_material_batch_and_items(self, db_session):
+        batch = MaterialBatch(
+            original_filename="素材.zip",
+            stored_zip_path="/tmp/materials.zip",
+            extract_dir="/tmp/materials",
+            total_count=2,
+            is_active=True,
+        )
+        db_session.add(batch)
+        db_session.flush()
+        db_session.add_all([
+            MaterialItem(
+                batch_id=batch.id,
+                sequence=1,
+                original_filename="a.jpg",
+                archive_path="a.jpg",
+                stored_path="/tmp/a.jpg",
+            ),
+            MaterialItem(
+                batch_id=batch.id,
+                sequence=2,
+                original_filename="b.jpg",
+                archive_path="nested/b.jpg",
+                stored_path="/tmp/b.jpg",
+            ),
+        ])
+        db_session.commit()
+        assert db_session.query(MaterialItem).count() == 2
 
 
 class TestPartialUniqueIndex:

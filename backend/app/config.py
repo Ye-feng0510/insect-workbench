@@ -10,6 +10,10 @@ TEMPLATES_DIR = DATA_DIR / "templates"
 IMAGES_DIR = DATA_DIR / "images"
 PROCESSED_IMAGES_DIR = DATA_DIR / "processed_images"
 EXPORTS_DIR = DATA_DIR / "exports"
+MATERIALS_DIR = DATA_DIR / "materials"
+MATERIAL_ZIPS_DIR = MATERIALS_DIR / "zips"
+MATERIAL_IMAGES_DIR = MATERIALS_DIR / "images"
+MATERIAL_EXPORTS_DIR = MATERIALS_DIR / "skipped_exports"
 DB_PATH = DATA_DIR / "app.db"
 
 # 前端构建产物目录
@@ -39,6 +43,13 @@ class Settings(BaseSettings):
     image_max_long_edge: int = 3000
     image_jpeg_quality: int = 90
 
+    # 数据素材 ZIP 安全限制
+    material_zip_max_size_mb: int = 2048
+    material_zip_max_uncompressed_mb: int = 4096
+    material_zip_max_images: int = 20000
+    material_zip_max_entries: int = 50000
+    material_image_max_pixels: int = 40000000
+
     # 开发模式: 前端独立运行时允许跨域
     cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
 
@@ -48,5 +59,14 @@ settings = Settings()
 
 def ensure_dirs() -> None:
     """首次启动时自动创建数据目录。"""
-    for d in (TEMPLATES_DIR, IMAGES_DIR, PROCESSED_IMAGES_DIR, EXPORTS_DIR, DATA_DIR):
+    for d in (
+        TEMPLATES_DIR,
+        IMAGES_DIR,
+        PROCESSED_IMAGES_DIR,
+        EXPORTS_DIR,
+        MATERIAL_ZIPS_DIR,
+        MATERIAL_IMAGES_DIR,
+        MATERIAL_EXPORTS_DIR,
+        DATA_DIR,
+    ):
         d.mkdir(parents=True, exist_ok=True)

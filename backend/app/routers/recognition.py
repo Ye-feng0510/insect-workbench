@@ -26,6 +26,7 @@ from app.schemas import (
     ExtractResponse,
 )
 from app.services import recognition_service as svc
+from app.services import materials_service
 
 router = APIRouter(prefix="/api/recognition", tags=["recognition"])
 
@@ -36,7 +37,12 @@ async def get_active_draft(db: Session = Depends(get_db)) -> dict[str, Any] | No
     record = svc.get_active_draft(db)
     if record is None:
         return None
-    return svc.record_to_detail(record)
+    detail = svc.record_to_detail(record)
+    item = materials_service.get_linked_item(db, record.id)
+    if item is not None:
+        detail["material_item_id"] = item.id
+        detail["material_batch_id"] = item.batch_id
+    return detail
 
 
 @router.post("/{record_id}/discard")
@@ -48,6 +54,7 @@ async def discard_draft(
     record = db.get(SpecimenRecord, record_id)
     if record is None:
         raise HTTPException(status_code=404, detail="记录不存在")
+    materials_service.reset_item_for_deleted_record(db, record_id)
     svc.discard_draft(db, record)
     return {"status": "discarded"}
 
@@ -168,8 +175,14 @@ async def confirm_extraction(
         )
 
     # 执行确认+分类+入表
+    material_item = materials_service.get_linked_item(db, record_id)
     result = await svc.confirm_and_classify(
-        db, record, req.confirmed, req.duplicate_action, existing
+        db,
+        record,
+        req.confirmed,
+        req.duplicate_action,
+        existing,
+        material_item,
     )
 
     # 计算 Excel 行号(base_write_row + zero_based_index)

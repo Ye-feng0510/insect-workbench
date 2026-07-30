@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
-import { Microscope, Table, Download, Settings, CheckCircle, XCircle } from 'lucide-react'
+import { Microscope, Images, Table, Download, Settings, CheckCircle, XCircle } from 'lucide-react'
 import { getModelConfig } from '@/services/settings'
 import { getCurrentTemplate } from '@/services/templates'
 
 const navItems = [
   { to: '/workbench', label: '识别工作台', icon: Microscope },
+  { to: '/materials', label: '数据素材图片', icon: Images },
   { to: '/records', label: '记录管理', icon: Table },
   { to: '/export', label: 'Excel 导出', icon: Download },
   { to: '/settings', label: '设置', icon: Settings },

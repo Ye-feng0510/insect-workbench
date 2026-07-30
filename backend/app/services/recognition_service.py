@@ -25,8 +25,11 @@ from app.field_mapping import (
 )
 from app.models import (
     AppSettings,
+    MaterialItem,
     SpecimenRecord,
     TaxonomyCache,
+    MATERIAL_STATUS_COMPLETED,
+    MATERIAL_STATUS_PROCESSING,
     STATUS_AWAITING_CONFIRMATION,
     STATUS_CLASSIFICATION_FAILED,
     STATUS_COMPLETED,
@@ -92,6 +95,7 @@ async def extract_image_info(
     image_path: str,
     image_filename: str,
     rotation_degrees: int = 0,
+    record: SpecimenRecord | None = None,
 ) -> SpecimenRecord:
     """上传图片并提取5项图片原始信息。
 
@@ -102,14 +106,13 @@ async def extract_image_info(
     - 调用视觉模型提取5项
     - 状态设为 awaiting_confirmation
     """
-    # 创建记录
-    record = SpecimenRecord(
-        image_filename=image_filename,
-        image_path=image_path,
-        rotation_degrees=rotation_degrees % 360,
-        status=STATUS_EXTRACTING,
-    )
-    db.add(record)
+    if record is None:
+        record = SpecimenRecord()
+        db.add(record)
+    record.image_filename = image_filename
+    record.image_path = image_path
+    record.rotation_degrees = rotation_degrees % 360
+    record.status = STATUS_EXTRACTING
     db.commit()
     db.refresh(record)
 
@@ -265,6 +268,7 @@ async def confirm_and_classify(
     confirmed: dict[str, str],
     duplicate_action: str | None = None,
     existing_record: SpecimenRecord | None = None,
+    material_item: MaterialItem | None = None,
 ) -> SpecimenRecord:
     """确认图片信息并自动入表(分类补全+校验+保存)。
 
@@ -286,6 +290,10 @@ async def confirm_and_classify(
         db.flush()
     else:
         target = record
+    if material_item is not None:
+        material_item.record_id = target.id
+        material_item.status = MATERIAL_STATUS_PROCESSING
+        material_item.error_message = ""
 
     # 3. 保存确认值到 confirmed_extraction_json
     target.confirmed_extraction_json = json.dumps(
@@ -343,6 +351,8 @@ async def confirm_and_classify(
 
     # 11. 合并13字段完成,状态设为 completed
     target.status = STATUS_COMPLETED
+    if material_item is not None:
+        material_item.status = MATERIAL_STATUS_COMPLETED
     all_warnings = field_warnings
     target.warnings_json = json.dumps(all_warnings, ensure_ascii=False)
 

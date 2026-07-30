@@ -174,6 +174,53 @@ class RecordUpdate(BaseModel):
 
 
 # ============================================================
+# 数据素材图片
+# ============================================================
+
+class MaterialBatchInfo(BaseModel):
+    id: int
+    original_filename: str
+    total_count: int
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class MaterialItemInfo(BaseModel):
+    id: int
+    batch_id: int
+    sequence: int
+    original_filename: str
+    archive_path: str
+    status: str
+    record_id: int | None = None
+    error_message: str = ""
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class MaterialSummary(BaseModel):
+    batch: MaterialBatchInfo | None = None
+    total_count: int = 0
+    pending_count: int = 0
+    processing_count: int = 0
+    completed_count: int = 0
+    skipped_count: int = 0
+    failed_count: int = 0
+
+
+class MaterialExtractResponse(ExtractResponse):
+    material_item_id: int
+    batch_id: int
+    original_filename: str
+    pending_count: int
+
+
+# ============================================================
 # Excel 预览与导出
 # ============================================================
 
