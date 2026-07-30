@@ -44,4 +44,9 @@ export async function skipMaterial(itemId: number): Promise<MaterialSummary> {
   return data
 }
 
+export async function deleteMaterialBatch(): Promise<MaterialSummary> {
+  const { data } = await api.delete<MaterialSummary>('/materials/batch')
+  return data
+}
+
 export const skippedMaterialsExportUrl = '/api/materials/skipped/export'

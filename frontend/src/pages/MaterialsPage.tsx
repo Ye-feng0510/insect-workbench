@@ -11,12 +11,14 @@ import {
   Loader2,
   PackageOpen,
   SkipForward,
+  Trash2,
   Upload,
 } from 'lucide-react'
 import EmptyState from '@/components/EmptyState'
 import Loading from '@/components/Loading'
 import { useToast } from '@/components/Toast'
 import {
+  deleteMaterialBatch,
   getMaterialSummary,
   listMaterialItems,
   skippedMaterialsExportUrl,
@@ -34,6 +36,8 @@ export default function MaterialsPage() {
   const [skippedItems, setSkippedItems] = useState<MaterialItemInfo[]>([])
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [dragging, setDragging] = useState(false)
 
   useEffect(() => {
@@ -85,6 +89,22 @@ export default function MaterialsPage() {
     } finally {
       uploadingRef.current = false
       setUploading(false)
+    }
+  }
+
+  const handleDeleteBatch = async () => {
+    if (deleting) return
+    setDeleting(true)
+    try {
+      const data = await deleteMaterialBatch()
+      setSummary(data)
+      setSkippedItems([])
+      show('素材批次已删除', 'success')
+    } catch (e) {
+      show(extractErrorMessage(e, '删除素材批次失败'), 'error')
+    } finally {
+      setDeleting(false)
+      setShowDeleteDialog(false)
     }
   }
 
@@ -213,9 +233,24 @@ export default function MaterialsPage() {
                     上传于 {new Date(summary.batch.created_at).toLocaleString('zh-CN', { hour12: false })}
                   </p>
                 </div>
-                <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs text-emerald-700">
-                  当前批次
-                </span>
+                <div className="flex shrink-0 items-center gap-2">
+                  <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs text-emerald-700">
+                    当前批次
+                  </span>
+                  <button
+                    onClick={() => setShowDeleteDialog(true)}
+                    disabled={deleting}
+                    title="删除当前批次"
+                    className="flex items-center gap-1 rounded-md border border-red-200 px-2.5 py-1 text-xs text-red-500 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {deleting ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <Trash2 className="h-3 w-3" />
+                    )}
+                    删除批次
+                  </button>
+                </div>
               </div>
               <div className="mb-2 flex justify-between text-xs text-gray-500">
                 <span>整体进度</span>
@@ -285,6 +320,38 @@ export default function MaterialsPage() {
           </a>
         </div>
       </div>
+
+      {showDeleteDialog ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="w-96 rounded-xl bg-white p-6 shadow-xl">
+            <h3 className="mb-2 text-lg font-semibold text-gray-800">删除素材批次</h3>
+            <p className="mb-4 text-sm text-gray-500">
+              确定删除当前素材批次?未完成的草稿将被放弃,已跳过的记录将清除。此操作不可撤销。
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setShowDeleteDialog(false)}
+                disabled={deleting}
+                className="rounded-lg border border-gray-300 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+              >
+                取消
+              </button>
+              <button
+                onClick={handleDeleteBatch}
+                disabled={deleting}
+                className="flex items-center gap-1.5 rounded-lg bg-red-500 px-4 py-2 text-sm font-medium text-white hover:bg-red-600 disabled:opacity-50"
+              >
+                {deleting ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Trash2 className="h-4 w-4" />
+                )}
+                确定删除
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

@@ -461,3 +461,103 @@ def test_duplicate_replace_keeps_material_link(materials_client, monkeypatch):
     ]
     assert all(item.record_id is None for item in linked_items)
     db.close()
+
+
+def test_delete_batch_clears_items_and_files(materials_client):
+    client, TestSession = materials_client
+    assert upload_zip(
+        client,
+        {
+            "a.jpg": image_bytes(),
+            "b.jpg": image_bytes((10, 20, 30)),
+        },
+    ).status_code == 200
+
+    db = TestSession()
+    batch = db.query(MaterialBatch).one()
+    extract_dir = __import__("pathlib").Path(batch.extract_dir)
+    zip_path = __import__("pathlib").Path(batch.stored_zip_path)
+    assert extract_dir.exists()
+    assert zip_path.exists()
+    db.close()
+
+    deleted = client.delete("/api/materials/batch")
+    assert deleted.status_code == 200
+    assert deleted.json()["total_count"] == 0
+    assert deleted.json()["batch"] is None
+
+    db = TestSession()
+    assert db.query(MaterialBatch).count() == 0
+    assert db.query(MaterialItem).count() == 0
+    db.close()
+
+    assert not extract_dir.exists()
+    assert not zip_path.exists()
+
+
+def test_delete_batch_with_processing_cleans_draft(materials_client):
+    client, TestSession = materials_client
+    assert upload_zip(client, {"x.jpg": image_bytes()}).status_code == 200
+
+    db = TestSession()
+    batch = db.query(MaterialBatch).one()
+    item = db.query(MaterialItem).one()
+    record = SpecimenRecord(
+        image_filename="x.jpg",
+        image_path="/tmp/fake.jpg",
+        status=STATUS_AWAITING_CONFIRMATION,
+    )
+    db.add(record)
+    db.commit()
+    item.record_id = record.id
+    item.status = "processing"
+    db.commit()
+    record_id = record.id
+    db.close()
+
+    deleted = client.delete("/api/materials/batch")
+    assert deleted.status_code == 200
+
+    db = TestSession()
+    assert db.query(MaterialBatch).count() == 0
+    assert db.query(MaterialItem).count() == 0
+    record = db.get(SpecimenRecord, record_id)
+    assert record.status == "discarded"
+    db.close()
+
+
+def test_delete_batch_with_completed_is_rejected(materials_client):
+    client, TestSession = materials_client
+    assert upload_zip(client, {"done.jpg": image_bytes()}).status_code == 200
+
+    db = TestSession()
+    batch = db.query(MaterialBatch).one()
+    item = db.query(MaterialItem).one()
+    record = SpecimenRecord(
+        image_filename="done.jpg",
+        image_path="/tmp/done.jpg",
+        status=STATUS_COMPLETED,
+        tuxiang="DONE-1",
+        zhongming="测试",
+    )
+    db.add(record)
+    db.commit()
+    item.record_id = record.id
+    item.status = MATERIAL_STATUS_COMPLETED
+    db.commit()
+    db.close()
+
+    deleted = client.delete("/api/materials/batch")
+    assert deleted.status_code == 409
+    assert "已完成" in deleted.json()["detail"]
+
+    db = TestSession()
+    assert db.query(MaterialBatch).count() == 1
+    assert db.query(MaterialItem).count() == 1
+    db.close()
+
+
+def test_delete_batch_when_none_returns_404(materials_client):
+    client, _ = materials_client
+    deleted = client.delete("/api/materials/batch")
+    assert deleted.status_code == 404

@@ -111,6 +111,11 @@ async def skip_item(item_id: int, db: Session = Depends(get_db)):
     return materials_service.skip_item(db, item_id)
 
 
+@router.delete("/batch", response_model=MaterialSummary)
+async def delete_active_batch(db: Session = Depends(get_db)):
+    return materials_service.delete_batch(db)
+
+
 @router.get("/skipped/export")
 async def export_skipped(db: Session = Depends(get_db)):
     export_path, count = materials_service.create_skipped_export(db)

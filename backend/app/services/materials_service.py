@@ -470,3 +470,60 @@ def create_skipped_export(db: Session) -> tuple[Path, int]:
             if source.exists():
                 zf.write(source, arcname=item.archive_path)
     return export_path, len(skipped)
+
+
+def delete_batch(db: Session) -> dict[str, Any]:
+    """删除当前活跃批次及其全部素材项和磁盘文件。
+
+    安全规则:
+    - 有 completed 素材项时禁止删除(已写入 Excel)
+    - 自动废弃 processing/failed 状态的关联草稿及其图片
+    - 级联删除全部 MaterialItem
+    - 清理解压目录和存储的 ZIP 文件
+    """
+    batch = get_active_batch(db)
+    if batch is None:
+        raise HTTPException(status_code=404, detail="没有可删除的素材批次")
+
+    completed_count = (
+        db.query(MaterialItem)
+        .filter(
+            MaterialItem.batch_id == batch.id,
+            MaterialItem.status == MATERIAL_STATUS_COMPLETED,
+        )
+        .count()
+    )
+    if completed_count > 0:
+        raise HTTPException(
+            status_code=409,
+            detail=f"当前批次有 {completed_count} 张已完成的素材,已写入 Excel,不能删除",
+        )
+
+    linked_items = (
+        db.query(MaterialItem)
+        .filter(
+            MaterialItem.batch_id == batch.id,
+            MaterialItem.record_id.isnot(None),
+        )
+        .all()
+    )
+    for item in linked_items:
+        record = db.get(SpecimenRecord, item.record_id)
+        if record is not None and record.status in ACTIVE_DRAFT_STATUSES:
+            record.status = STATUS_DISCARDED
+            if record.image_path:
+                Path(record.image_path).unlink(missing_ok=True)
+
+    extract_dir = batch.extract_dir
+    zip_path = batch.stored_zip_path
+
+    db.query(MaterialItem).filter(MaterialItem.batch_id == batch.id).delete()
+    db.delete(batch)
+    db.commit()
+
+    if extract_dir:
+        shutil.rmtree(extract_dir, ignore_errors=True)
+    if zip_path:
+        Path(zip_path).unlink(missing_ok=True)
+
+    return get_summary(db)
