@@ -243,8 +243,8 @@ export default function WorkbenchPage() {
   }
 
   return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-4" style={{ height: 'calc(100vh - 200px)' }}>
+    <div className="flex flex-col gap-4" style={{ height: 'calc(100vh - 48px)' }}>
+      <div className="grid min-h-0 flex-1 grid-cols-2 gap-4">
         {/* 左侧:图片区 */}
         <div className="flex flex-col rounded-xl border border-gray-200 bg-white p-4">
           <div className="mb-3 flex items-center justify-between">
@@ -516,7 +516,7 @@ export default function WorkbenchPage() {
       </div>
 
       {/* Excel 实时预览区 */}
-      <div style={{ height: '35vh', minHeight: '200px' }}>
+      <div className="h-[220px] shrink-0">
         <ExcelPreview
           draftRow={draft?.status === STATUS.AWAITING_CONFIRMATION ? draft.extracted : null}
           highlightRow={highlightRow}
