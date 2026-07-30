@@ -352,7 +352,7 @@ export default function WorkbenchPage() {
     <div className="flex flex-col gap-4" style={{ height: 'calc(100vh - 48px)' }}>
       <div className="grid min-h-0 flex-1 grid-cols-2 gap-4">
         {/* 左侧:图片区 */}
-        <div className="flex flex-col rounded-xl border border-gray-200 bg-white p-4">
+        <div className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-gray-200 bg-white p-4">
           <div className="mb-3 flex items-center justify-between">
             <h3 className="text-sm font-semibold text-gray-700">标本图片</h3>
             {draft && (
@@ -363,7 +363,7 @@ export default function WorkbenchPage() {
           </div>
 
           {/* 上传/预览区 */}
-          <div className="relative flex flex-1 items-center justify-center overflow-hidden rounded-lg bg-gray-50">
+          <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-lg bg-gray-50">
             {!draft && !extracting && (
               <div
                 onClick={() => fileRef.current?.click()}
@@ -541,7 +541,7 @@ export default function WorkbenchPage() {
         </div>
 
         {/* 右侧:信息确认 */}
-        <div className="flex flex-col gap-4 overflow-y-auto">
+        <div className="flex min-h-0 flex-col gap-4 overflow-y-auto">
           {/* 卡片1:图片原始信息确认 */}
           <div className="rounded-xl border border-gray-200 bg-white p-4">
             <div className="mb-3 flex items-center gap-2">
