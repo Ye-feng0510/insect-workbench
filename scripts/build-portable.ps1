@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$Version = "v1.0.0",
     [string]$BuildPython = "",
     [string]$OutputDirectory = ""
@@ -18,6 +18,7 @@ $pythonArchive = Join-Path $cacheRoot "python-3.12.10-embed-amd64.zip"
 $pythonUrl = "https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip"
 $pythonSha256 = "4ACBED6DD1C744B0376E3B1CF57CE906F9DC9E95E68824584C8099A63025A3C3"
 $utf8 = New-Object System.Text.UTF8Encoding($false)
+$utf8Bom = New-Object System.Text.UTF8Encoding($true)
 
 if (-not $OutputDirectory) {
     $OutputDirectory = Join-Path $projectRoot "portable-dist"
@@ -103,8 +104,11 @@ Copy-Item -LiteralPath (Join-Path $projectRoot ".env.example") `
     -Destination (Join-Path $packageRoot ".env.example")
 Copy-Item -LiteralPath (Join-Path $projectRoot "README.md") `
     -Destination (Join-Path $packageRoot "项目说明.md")
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot "portable\start-portable.ps1") `
-    -Destination (Join-Path $packageRoot "start-portable.ps1")
+$launcherSource = Join-Path $PSScriptRoot "portable\start-portable.ps1"
+$launcherDestination = Join-Path $packageRoot "start-portable.ps1"
+$launcherContent = [IO.File]::ReadAllText($launcherSource) `
+    -replace "`r?`n", "`r`n"
+[IO.File]::WriteAllText($launcherDestination, $launcherContent, $utf8Bom)
 $batchSource = Join-Path $PSScriptRoot "portable\start-portable.bat"
 $batchDestination = Join-Path $packageRoot "启动昆虫标本工作台.bat"
 $batchContent = [IO.File]::ReadAllText($batchSource) -replace "`r?`n", "`r`n"
@@ -114,6 +118,28 @@ Copy-Item -LiteralPath (
 ) -Destination (Join-Path $packageRoot "便携版使用说明.txt")
 
 Write-Host "[5/7] 验证隔离运行时..."
+$env:INSECT_PORTABLE_SCRIPT_TO_PARSE = $launcherDestination
+try {
+    & powershell.exe -NoLogo -NoProfile -Command @'
+$tokens = $null
+$errors = $null
+[void][System.Management.Automation.Language.Parser]::ParseFile(
+    $env:INSECT_PORTABLE_SCRIPT_TO_PARSE,
+    [ref]$tokens,
+    [ref]$errors
+)
+if ($errors.Count -gt 0) {
+    $errors | ForEach-Object { Write-Error $_.Message }
+    exit 1
+}
+'@
+    if ($LASTEXITCODE -ne 0) {
+        throw "启动脚本不兼容 Windows PowerShell 5.1。"
+    }
+}
+finally {
+    Remove-Item Env:INSECT_PORTABLE_SCRIPT_TO_PARSE -ErrorAction SilentlyContinue
+}
 $embeddedPython = Join-Path $pythonRoot "python.exe"
 $smokeCode = @"
 import pathlib
