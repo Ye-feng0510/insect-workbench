@@ -24,8 +24,10 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    Index,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -62,6 +64,7 @@ ACTIVE_DRAFT_STATUSES = frozenset(
         STATUS_AWAITING_CONFIRMATION,
         STATUS_CLASSIFYING,
         STATUS_EXTRACTION_FAILED,
+        STATUS_CLASSIFICATION_FAILED,
     }
 )
 
@@ -116,6 +119,9 @@ class ExcelTemplate(Base):
     __tablename__ = "excel_templates"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    owner_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, default=1
+    )
     original_filename: Mapped[str] = mapped_column(String(500))
     stored_path: Mapped[str] = mapped_column(String(1000))
     target_sheet: Mapped[str] = mapped_column(String(200), default="")
@@ -146,6 +152,9 @@ class SpecimenRecord(Base):
     __tablename__ = "specimen_records"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    owner_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, default=1
+    )
 
     # 图片信息
     image_filename: Mapped[str] = mapped_column(String(500), default="")
@@ -191,8 +200,13 @@ class SpecimenRecord(Base):
     )
 
 
-# 注:completed 状态的"图像"编号部分唯一索引由 database.init_db() 显式创建,
-# 确保在文件数据库上也能正确生效。
+Index(
+    "uq_specimen_owner_tuxiang_completed",
+    SpecimenRecord.owner_id,
+    SpecimenRecord.tuxiang,
+    unique=True,
+    sqlite_where=SpecimenRecord.status == STATUS_COMPLETED,
+)
 
 
 # ============================================================
@@ -206,9 +220,13 @@ class TaxonomyCache(Base):
     """
 
     __tablename__ = "taxonomy_cache"
+    __table_args__ = (UniqueConstraint("owner_id", "zhongming"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    zhongming: Mapped[str] = mapped_column(String(200), unique=True, index=True)
+    owner_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    zhongming: Mapped[str] = mapped_column(String(200), index=True)
     phylum: Mapped[str] = mapped_column(String(200), default="")
     gang: Mapped[str] = mapped_column(String(200), default="")
     klass: Mapped[str] = mapped_column(String(200), default="")
@@ -237,6 +255,9 @@ class MaterialBatch(Base):
     __tablename__ = "material_batches"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    owner_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, default=1
+    )
     original_filename: Mapped[str] = mapped_column(String(500))
     stored_zip_path: Mapped[str] = mapped_column(String(1000))
     extract_dir: Mapped[str] = mapped_column(String(1000))
@@ -250,6 +271,20 @@ class MaterialBatch(Base):
         server_default=func.current_timestamp(),
         onupdate=func.current_timestamp(),
     )
+
+
+Index(
+    "uq_template_owner_active",
+    ExcelTemplate.owner_id,
+    unique=True,
+    sqlite_where=ExcelTemplate.is_active.is_(True),
+)
+Index(
+    "uq_batch_owner_active",
+    MaterialBatch.owner_id,
+    unique=True,
+    sqlite_where=MaterialBatch.is_active.is_(True),
+)
 
 
 # ============================================================
@@ -334,4 +369,110 @@ class MaterialPrefetchResult(Base):
         DateTime,
         server_default=func.current_timestamp(),
         onupdate=func.current_timestamp(),
+    )
+
+
+# ============================================================
+# 用户、会话、配额与导出审计
+# ============================================================
+
+ROLE_ADMIN = "admin"
+ROLE_USER = "user"
+USAGE_RESERVED = "reserved"
+USAGE_CHARGED = "charged"
+USAGE_RELEASED = "released"
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    username: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String(500))
+    role: Mapped[str] = mapped_column(String(20), default=ROLE_USER, index=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    workflow_quota: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    workflow_reserved: Mapped[int] = mapped_column(Integer, default=0)
+    workflow_charged: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        server_default=func.current_timestamp(),
+        onupdate=func.current_timestamp(),
+    )
+
+
+class AuthSession(Base):
+    __tablename__ = "auth_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    csrf_hash: Mapped[str] = mapped_column(String(64))
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp()
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp()
+    )
+
+
+class WorkflowUsage(Base):
+    __tablename__ = "workflow_usages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    owner_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    record_id: Mapped[int] = mapped_column(
+        ForeignKey("specimen_records.id", ondelete="CASCADE"),
+        unique=True,
+        index=True,
+    )
+    status: Mapped[str] = mapped_column(String(20), default=USAGE_RESERVED, index=True)
+    reserved_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp()
+    )
+    charged_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    released_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class QuotaAdjustment(Base):
+    __tablename__ = "quota_adjustments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    actor_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), index=True
+    )
+    old_quota: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    new_quota: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reason: Mapped[str] = mapped_column(String(500), default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp()
+    )
+
+
+class ExportArtifact(Base):
+    __tablename__ = "export_artifacts"
+    __table_args__ = (UniqueConstraint("owner_id", "filename"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    owner_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    filename: Mapped[str] = mapped_column(String(500))
+    stored_path: Mapped[str] = mapped_column(String(1000))
+    created_by_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp()
     )

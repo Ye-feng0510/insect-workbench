@@ -29,6 +29,7 @@ from app.models import (
     SpecimenRecord,
     TaxonomyCache,
     MATERIAL_STATUS_COMPLETED,
+    MATERIAL_STATUS_FAILED,
     MATERIAL_STATUS_PROCESSING,
     STATUS_AWAITING_CONFIRMATION,
     STATUS_CLASSIFICATION_FAILED,
@@ -38,6 +39,7 @@ from app.models import (
 )
 from app.routers.settings import _get_or_create_settings
 from app.services.model_provider import ModelError, VisionModelClient
+from app.services import quota_service
 
 
 def _load_prompt(db: Session, attr: str, default_filename: str) -> str:
@@ -72,13 +74,16 @@ def save_uploaded_image(file_content: bytes, original_filename: str) -> tuple[st
     return stored_name, str(stored_path)
 
 
-def get_active_draft(db: Session) -> SpecimenRecord | None:
+def get_active_draft(db: Session, owner_id: int) -> SpecimenRecord | None:
     """获取当前活跃草稿(非 completed/discarded 的最新记录)。"""
     from app.models import ACTIVE_DRAFT_STATUSES
 
     return (
         db.query(SpecimenRecord)
-        .filter(SpecimenRecord.status.in_(ACTIVE_DRAFT_STATUSES))
+        .filter(
+            SpecimenRecord.owner_id == owner_id,
+            SpecimenRecord.status.in_(ACTIVE_DRAFT_STATUSES),
+        )
         .order_by(SpecimenRecord.id.desc())
         .first()
     )
@@ -87,6 +92,7 @@ def get_active_draft(db: Session) -> SpecimenRecord | None:
 def discard_draft(db: Session, record: SpecimenRecord) -> None:
     """放弃草稿(状态改为 discarded)。"""
     record.status = "discarded"
+    quota_service.release(db, record.id)
     db.commit()
 
 
@@ -97,6 +103,7 @@ async def extract_image_info(
     rotation_degrees: int = 0,
     record: SpecimenRecord | None = None,
     precomputed_result: dict[str, Any] | None = None,
+    owner_id: int | None = None,
 ) -> SpecimenRecord:
     """上传图片并提取5项图片原始信息。
 
@@ -110,13 +117,16 @@ async def extract_image_info(
     当 precomputed_result 不为 None 时，跳过模型调用直接使用预加载结果。
     """
     if record is None:
-        record = SpecimenRecord()
+        if owner_id is None:
+            raise ValueError("owner_id is required for a new record")
+        record = SpecimenRecord(owner_id=owner_id)
         db.add(record)
     record.image_filename = image_filename
     record.image_path = image_path
     record.rotation_degrees = rotation_degrees % 360
     record.status = STATUS_EXTRACTING
-    db.commit()
+    db.flush()
+    quota_service.reserve(db, record.owner_id, record.id)
     db.refresh(record)
 
     if precomputed_result is not None:
@@ -130,6 +140,7 @@ async def extract_image_info(
         except ModelError as e:
             record.status = STATUS_EXTRACTION_FAILED
             record.warnings_json = json.dumps([str(e)], ensure_ascii=False)
+            quota_service.release(db, record.id)
             db.commit()
             raise HTTPException(status_code=502, detail=f"图片识别失败: {e}")
 
@@ -181,6 +192,7 @@ async def re_extract_image_info(
 
     record.status = STATUS_EXTRACTING
     db.commit()
+    quota_service.reserve(db, record.owner_id, record.id)
 
     try:
         result = await client.recognize_image(
@@ -189,6 +201,7 @@ async def re_extract_image_info(
     except ModelError as e:
         record.status = STATUS_EXTRACTION_FAILED
         record.warnings_json = json.dumps([str(e)], ensure_ascii=False)
+        quota_service.release(db, record.id)
         db.commit()
         raise HTTPException(status_code=502, detail=f"重新识别失败: {e}")
 
@@ -228,12 +241,13 @@ async def re_extract_image_info(
 
 
 def check_duplicate_tuxiang(
-    db: Session, tuxiang: str, exclude_id: int | None = None
+    db: Session, tuxiang: str, owner_id: int, exclude_id: int | None = None
 ) -> SpecimenRecord | None:
     """检查图像编号是否在已完成记录中已存在。"""
     if not tuxiang:
         return None
     q = db.query(SpecimenRecord).filter(
+        SpecimenRecord.owner_id == owner_id,
         SpecimenRecord.tuxiang == tuxiang,
         SpecimenRecord.status == STATUS_COMPLETED,
     )
@@ -284,18 +298,13 @@ async def confirm_and_classify(
     field_warnings = validate_confirmed_fields(confirmed)
 
     # 2. 处理重复编号
-    if existing_record is not None:
-        if duplicate_action != "replace":
-            raise HTTPException(
-                status_code=409,
-                detail="图像编号已存在",
-            )
-        # 覆盖:更新已有记录,删除当前草稿
-        target = existing_record
-        db.delete(record)
-        db.flush()
-    else:
-        target = record
+    billing_record_id = record.id
+    if existing_record is not None and duplicate_action != "replace":
+        raise HTTPException(
+            status_code=409,
+            detail="图像编号已存在",
+        )
+    target = record
     if material_item is not None:
         material_item.record_id = target.id
         material_item.status = MATERIAL_STATUS_PROCESSING
@@ -316,24 +325,30 @@ async def confirm_and_classify(
 
     # 5. 查分类缓存
     confirmed_zhongming = confirmed["中名"].strip()
-    taxonomy = _query_taxonomy_cache(db, confirmed_zhongming)
+    taxonomy = _query_taxonomy_cache(db, record.owner_id, confirmed_zhongming)
 
     # 6. 缓存未命中则调用模型
-    if taxonomy is None:
-        taxonomy = await _call_taxonomy_model(db, confirmed_zhongming)
+    try:
+        if taxonomy is None:
+            taxonomy = await _call_taxonomy_model(db, confirmed_zhongming)
 
-    # 7. 校验分类字段
-    validation_errors = validate_taxonomy(taxonomy)
-
-    # 8. 首次校验失败时自动纠正重试1次
-    if validation_errors:
-        from app.config import settings
-
-        taxonomy2 = await _call_taxonomy_model_with_errors(
-            db, confirmed_zhongming, validation_errors
-        )
-        taxonomy = taxonomy2
+        # 7. 校验分类字段
         validation_errors = validate_taxonomy(taxonomy)
+
+        # 8. 首次校验失败时自动纠正重试1次
+        if validation_errors:
+            taxonomy2 = await _call_taxonomy_model_with_errors(
+                db, confirmed_zhongming, validation_errors
+            )
+            taxonomy = taxonomy2
+            validation_errors = validate_taxonomy(taxonomy)
+    except HTTPException:
+        target.status = STATUS_CLASSIFICATION_FAILED
+        if material_item is not None:
+            material_item.status = MATERIAL_STATUS_FAILED
+            material_item.error_message = "分类补全失败"
+        db.commit()
+        raise
 
     if validation_errors:
         # 分类失败:保留5项确认信息,不写缓存
@@ -341,6 +356,9 @@ async def confirm_and_classify(
         target.taxonomy_result_json = json.dumps(taxonomy, ensure_ascii=False)
         all_warnings = field_warnings + validation_errors
         target.warnings_json = json.dumps(all_warnings, ensure_ascii=False)
+        if material_item is not None:
+            material_item.status = MATERIAL_STATUS_FAILED
+            material_item.error_message = "；".join(validation_errors)
         db.commit()
         db.refresh(target)
         return target
@@ -353,23 +371,41 @@ async def confirm_and_classify(
     target.taxonomy_result_json = json.dumps(taxonomy, ensure_ascii=False)
 
     # 10. 更新缓存(只有校验通过才写)
-    _update_taxonomy_cache(db, confirmed_zhongming, taxonomy)
+    _update_taxonomy_cache(db, record.owner_id, confirmed_zhongming, taxonomy)
 
     # 11. 合并13字段完成,状态设为 completed
-    target.status = STATUS_COMPLETED
+    target.warnings_json = json.dumps(field_warnings, ensure_ascii=False)
+    result = target
+    if existing_record is not None:
+        for field in IMAGE_EXTRACTED_FIELDS + TAXONOMY_FIELDS:
+            column = FIELD_TO_COLUMN[field]
+            setattr(existing_record, column, getattr(target, column))
+        existing_record.confirmed_extraction_json = target.confirmed_extraction_json
+        existing_record.taxonomy_result_json = target.taxonomy_result_json
+        existing_record.warnings_json = target.warnings_json
+        existing_record.status = STATUS_COMPLETED
+        target.status = "discarded"
+        result = existing_record
+    else:
+        target.status = STATUS_COMPLETED
     if material_item is not None:
+        material_item.record_id = result.id
         material_item.status = MATERIAL_STATUS_COMPLETED
-    all_warnings = field_warnings
-    target.warnings_json = json.dumps(all_warnings, ensure_ascii=False)
-
+        material_item.error_message = ""
+    quota_service.charge(db, billing_record_id)
     db.commit()
-    db.refresh(target)
-    return target
+    db.refresh(result)
+    return result
 
 
-def _query_taxonomy_cache(db: Session, zhongming: str) -> dict[str, Any] | None:
+def _query_taxonomy_cache(
+    db: Session, owner_id: int, zhongming: str
+) -> dict[str, Any] | None:
     """查询分类缓存。"""
-    cache = db.query(TaxonomyCache).filter(TaxonomyCache.zhongming == zhongming).first()
+    cache = db.query(TaxonomyCache).filter(
+        TaxonomyCache.owner_id == owner_id,
+        TaxonomyCache.zhongming == zhongming,
+    ).first()
     if cache is None:
         return None
     result = {}
@@ -466,17 +502,23 @@ def validate_taxonomy(taxonomy: dict[str, Any]) -> list[str]:
 
 
 def _update_taxonomy_cache(
-    db: Session, zhongming: str, taxonomy: dict[str, Any]
+    db: Session,
+    owner_id: int,
+    zhongming: str,
+    taxonomy: dict[str, Any],
 ) -> None:
     """更新分类缓存(只有校验通过才调用)。"""
-    cache = db.query(TaxonomyCache).filter(TaxonomyCache.zhongming == zhongming).first()
+    cache = db.query(TaxonomyCache).filter(
+        TaxonomyCache.owner_id == owner_id,
+        TaxonomyCache.zhongming == zhongming,
+    ).first()
     if cache is None:
-        cache = TaxonomyCache(zhongming=zhongming)
+        cache = TaxonomyCache(owner_id=owner_id, zhongming=zhongming)
         db.add(cache)
     for field in TAXONOMY_FIELDS:
         col = FIELD_TO_COLUMN[field]
         setattr(cache, col, str(taxonomy.get(field, "")).strip())
-    db.commit()
+    db.flush()
 
 
 def record_to_fields(record: SpecimenRecord) -> dict[str, str]:

@@ -29,7 +29,17 @@ class TemplateError(Exception):
     """模板处理错误。"""
 
 
-def upload_template(db: Session, file: UploadFile) -> ExcelTemplate:
+def resolve_template_path(template: ExcelTemplate) -> Path:
+    stored = Path(template.stored_path)
+    if stored.is_file():
+        return stored
+    portable = TEMPLATES_DIR / Path(
+        template.stored_path.replace("\\", "/")
+    ).name
+    return portable if portable.is_file() else stored
+
+
+def upload_template(db: Session, file: UploadFile, owner_id: int) -> ExcelTemplate:
     """上传 Excel 模板,保存文件并创建数据库记录。
 
     新上传的模板自动设为活跃,旧模板取消活跃。
@@ -58,12 +68,16 @@ def upload_template(db: Session, file: UploadFile) -> ExcelTemplate:
         raise HTTPException(status_code=400, detail=f"Excel 文件损坏或格式不正确: {e}") from e
 
     # 取消旧模板活跃状态
-    db.query(ExcelTemplate).filter(ExcelTemplate.is_active == True).update(  # noqa: E712
+    db.query(ExcelTemplate).filter(
+        ExcelTemplate.owner_id == owner_id,
+        ExcelTemplate.is_active == True,  # noqa: E712
+    ).update(
         {ExcelTemplate.is_active: False}
     )
 
     # 创建新记录
     template = ExcelTemplate(
+        owner_id=owner_id,
         original_filename=file.filename,
         stored_path=str(stored_path),
         is_active=True,
@@ -74,19 +88,24 @@ def upload_template(db: Session, file: UploadFile) -> ExcelTemplate:
     return template
 
 
-def get_active_template(db: Session) -> ExcelTemplate | None:
+def get_active_template(db: Session, owner_id: int) -> ExcelTemplate | None:
     """获取当前活跃模板。"""
     return (
         db.query(ExcelTemplate)
-        .filter(ExcelTemplate.is_active == True)  # noqa: E712
+        .filter(
+            ExcelTemplate.owner_id == owner_id,
+            ExcelTemplate.is_active == True,  # noqa: E712
+        )
         .first()
     )
 
 
-def get_template_or_404(db: Session, template_id: int) -> ExcelTemplate:
+def get_template_or_404(
+    db: Session, template_id: int, owner_id: int
+) -> ExcelTemplate:
     """按 ID 获取模板,不存在则 404。"""
     obj = db.get(ExcelTemplate, template_id)
-    if obj is None:
+    if obj is None or obj.owner_id != owner_id:
         raise HTTPException(status_code=404, detail="模板不存在")
     return obj
 
@@ -94,7 +113,7 @@ def get_template_or_404(db: Session, template_id: int) -> ExcelTemplate:
 def list_sheets(template: ExcelTemplate) -> list[dict[str, Any]]:
     """读取模板所有工作表名称及尺寸。"""
     try:
-        wb = load_workbook(template.stored_path, read_only=True)
+        wb = load_workbook(resolve_template_path(template), read_only=True)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"读取模板失败: {e}") from e
 
@@ -116,7 +135,7 @@ def inspect_template(
     清单 12.2:扫描前 20 行寻找表头,能匹配多个目标字段的行作为候选。
     """
     try:
-        wb = load_workbook(template.stored_path, read_only=True)
+        wb = load_workbook(resolve_template_path(template), read_only=True)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"读取模板失败: {e}") from e
 
@@ -195,7 +214,7 @@ def calculate_base_write_row(
         return start_row
 
     try:
-        wb = load_workbook(template.stored_path, read_only=True)
+        wb = load_workbook(resolve_template_path(template), read_only=True)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"读取模板失败: {e}") from e
 
@@ -235,7 +254,7 @@ def save_mapping(
     """保存字段映射配置,含 base_write_row 计算。"""
     # 校验目标工作表存在
     try:
-        wb = load_workbook(template.stored_path, read_only=True)
+        wb = load_workbook(resolve_template_path(template), read_only=True)
         if target_sheet not in wb.sheetnames:
             raise HTTPException(
                 status_code=400,
@@ -283,7 +302,7 @@ def test_mapping(template: ExcelTemplate) -> dict[str, Any]:
     field_mapping = json.loads(template.field_mapping_json) if template.field_mapping_json else {}
 
     try:
-        wb = load_workbook(template.stored_path, read_only=True)
+        wb = load_workbook(resolve_template_path(template), read_only=True)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"读取模板失败: {e}") from e
 

@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.config import settings as app_config
+from app.auth import require_admin
 from app.database import get_db
 from app.models import AppSettings
 from app.schemas import (
@@ -26,7 +27,11 @@ from app.schemas import (
 )
 from app.services.model_provider import ModelError, VisionModelClient
 
-router = APIRouter(prefix="/api/settings", tags=["settings"])
+router = APIRouter(
+    prefix="/api/settings",
+    tags=["settings"],
+    dependencies=[Depends(require_admin)],
+)
 
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 

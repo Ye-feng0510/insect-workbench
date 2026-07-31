@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Search, Filter, Edit2, Trash2, RefreshCw, Eye, Loader2,
   X, Save, AlertCircle, Inbox,
@@ -6,6 +6,7 @@ import {
 import { useToast } from '@/components/Toast'
 import Loading from '@/components/Loading'
 import EmptyState from '@/components/EmptyState'
+import AuthenticatedImage from '@/components/AuthenticatedImage'
 import {
   listRecords, updateRecord, deleteRecord, reclassifyRecord,
 } from '@/services/records'
@@ -34,25 +35,35 @@ export default function RecordsPage() {
   const [viewingImage, setViewingImage] = useState<RecordDetail | null>(null)
   const [deleting, setDeleting] = useState<RecordDetail | null>(null)
   const [reclassifying, setReclassifying] = useState<number | null>(null)
+  const recordsRequestRef = useRef(0)
 
-  useEffect(() => {
-    loadRecords()
-  }, [])
-
-  const loadRecords = async () => {
+  const loadRecords = useCallback(async (
+    nextSearch: string,
+    nextStatus: string,
+  ) => {
+    const requestId = ++recordsRequestRef.current
     setLoading(true)
     try {
-      const data = await listRecords(search || undefined, statusFilter || undefined)
-      setRecords(data)
+      const data = await listRecords(
+        nextSearch || undefined,
+        nextStatus || undefined,
+      )
+      if (requestId === recordsRequestRef.current) setRecords(data)
     } catch (e) {
-      show(extractErrorMessage(e, '加载记录失败'), 'error')
+      if (requestId === recordsRequestRef.current) {
+        show(extractErrorMessage(e, '加载记录失败'), 'error')
+      }
     } finally {
-      setLoading(false)
+      if (requestId === recordsRequestRef.current) setLoading(false)
     }
-  }
+  }, [show])
+
+  useEffect(() => {
+    void loadRecords('', '')
+  }, [loadRecords])
 
   const handleSearch = () => {
-    loadRecords()
+    void loadRecords(search, statusFilter)
   }
 
   const handleEdit = (record: RecordDetail) => {
@@ -67,7 +78,7 @@ export default function RecordsPage() {
       await updateRecord(editing.id, editFields)
       show('记录已更新', 'success')
       setEditing(null)
-      loadRecords()
+      void loadRecords(search, statusFilter)
     } catch (e) {
       show(extractErrorMessage(e, '更新失败'), 'error')
     } finally {
@@ -81,7 +92,7 @@ export default function RecordsPage() {
       await deleteRecord(deleting.id)
       show('记录已删除', 'success')
       setDeleting(null)
-      loadRecords()
+      void loadRecords(search, statusFilter)
     } catch (e) {
       show(extractErrorMessage(e, '删除失败'), 'error')
     }
@@ -96,7 +107,7 @@ export default function RecordsPage() {
       } else {
         show('分类仍然失败,请检查中名或手动编辑分类字段', 'error')
       }
-      loadRecords()
+      void loadRecords(search, statusFilter)
     } catch (e) {
       show(extractErrorMessage(e, '重新分类失败'), 'error')
     } finally {
@@ -129,7 +140,11 @@ export default function RecordsPage() {
           <Filter className="h-4 w-4 text-gray-400" />
           <select
             value={statusFilter}
-            onChange={(e) => { setStatusFilter(e.target.value); setTimeout(loadRecords, 0) }}
+            onChange={(e) => {
+              const nextStatus = e.target.value
+              setStatusFilter(nextStatus)
+              void loadRecords(search, nextStatus)
+            }}
             className="rounded-md border border-gray-300 px-2 py-1 text-sm focus:outline-none"
           >
             {STATUS_OPTIONS.map(opt => (
@@ -302,7 +317,7 @@ export default function RecordsPage() {
       {viewingImage && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setViewingImage(null)}>
           <div className="max-h-[90vh] max-w-[90vw] overflow-auto">
-            <img
+            <AuthenticatedImage
               src={viewingImage.image_path ? imageUrl(viewingImage.image_path) : ''}
               alt={`记录 ${viewingImage.id}`}
               className="max-h-[90vh] max-w-[90vw] object-contain"

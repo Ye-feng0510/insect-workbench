@@ -23,6 +23,7 @@ import {
 } from '@/lib/status'
 import type { MaterialSummary, RecordDetail } from '@/types'
 import ExcelPreview from '@/components/ExcelPreview'
+import AuthenticatedImage from '@/components/AuthenticatedImage'
 
 interface DraftData {
   recordId: number
@@ -53,7 +54,18 @@ export default function WorkbenchPage() {
   const [queueLoading, setQueueLoading] = useState(false)
   const [skipping, setSkipping] = useState(false)
   const [prefetchStatus, setPrefetchStatus] = useState<MaterialPrefetchStatus | null>(null)
+  const [localImageUrl, setLocalImageUrl] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (!originalFile) {
+      setLocalImageUrl('')
+      return
+    }
+    const url = URL.createObjectURL(originalFile)
+    setLocalImageUrl(url)
+    return () => URL.revokeObjectURL(url)
+  }, [originalFile])
 
   // 定期轮询预加载状态
   const refreshPrefetchStatusCb = useCallback(async () => {
@@ -386,7 +398,19 @@ export default function WorkbenchPage() {
           <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-lg bg-gray-50">
             {!draft && !extracting && (
               <div
+                role="button"
+                tabIndex={0}
+                aria-label="上传标本图片"
                 onClick={() => fileRef.current?.click()}
+                onKeyDown={(event) => {
+                  if (
+                    event.target === event.currentTarget
+                    && (event.key === 'Enter' || event.key === ' ')
+                  ) {
+                    event.preventDefault()
+                    fileRef.current?.click()
+                  }
+                }}
                 onDragOver={(e) => e.preventDefault()}
                 onDrop={(e) => {
                   e.preventDefault()
@@ -449,8 +473,9 @@ export default function WorkbenchPage() {
 
             {draft && !extracting && (
               <div className="relative flex h-full w-full items-center justify-center overflow-auto">
-                <img
-                  src={draft.imagePath ? imageUrl(draft.imagePath) : (originalFile ? URL.createObjectURL(originalFile) : '')}
+                <AuthenticatedImage
+                  src={draft.imagePath ? imageUrl(draft.imagePath) : ''}
+                  fallbackSrc={localImageUrl}
                   alt="标本图片"
                   className="max-h-full max-w-full object-contain transition-transform"
                   style={{

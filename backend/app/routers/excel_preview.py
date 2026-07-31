@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.auth import AuthContext, get_auth_context
 from app.services import preview_service
 
 router = APIRouter(prefix="/api/excel", tags=["excel-preview"])
@@ -20,7 +21,8 @@ router = APIRouter(prefix="/api/excel", tags=["excel-preview"])
 async def get_preview(
     mode: str = Query("target", pattern="^(target|all)$"),
     limit: int = Query(100, ge=1, le=1000),
+    ctx: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """获取 Excel 实时预览数据。"""
-    return preview_service.get_preview(db, mode, limit)
+    return preview_service.get_preview(db, mode, limit, ctx.owner_id)

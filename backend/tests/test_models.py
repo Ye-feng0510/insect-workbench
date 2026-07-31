@@ -164,8 +164,8 @@ class TestTaxonomyCache:
         """中名在缓存中唯一。"""
         from sqlalchemy.exc import IntegrityError
 
-        c1 = TaxonomyCache(zhongming="二点红蝽", phylum="Arthropoda")
-        c2 = TaxonomyCache(zhongming="二点红蝽", phylum="Arthropoda")
+        c1 = TaxonomyCache(owner_id=1, zhongming="二点红蝽", phylum="Arthropoda")
+        c2 = TaxonomyCache(owner_id=1, zhongming="二点红蝽", phylum="Arthropoda")
         db_session.add_all([c1, c2])
         with pytest.raises(IntegrityError):
             db_session.commit()

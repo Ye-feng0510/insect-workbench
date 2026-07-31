@@ -16,6 +16,8 @@ from app.routers import excel_preview as excel_preview_router
 from app.routers import records as records_router
 from app.routers import export as export_router
 from app.routers import materials as materials_router
+from app.routers import auth as auth_router
+from app.routers import admin as admin_router
 from app.services.prefetch_service import PrefetchWorker
 
 
@@ -95,6 +97,8 @@ async def health() -> dict:
 
 
 # 注册路由
+app.include_router(auth_router.router)
+app.include_router(admin_router.router)
 app.include_router(settings_router.router)
 app.include_router(templates_router.router)
 app.include_router(recognition_router.router)

@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.auth import AuthContext, get_auth_context
 from app.field_mapping import FIELD_TO_COLUMN, TAXONOMY_FIELDS, IMAGE_EXTRACTED_FIELDS
 from app.models import SpecimenRecord, STATUS_COMPLETED
 from app.schemas import RecordDetail, RecordSummary, RecordUpdate
@@ -27,10 +28,14 @@ router = APIRouter(prefix="/api/records", tags=["records"])
 async def list_records(
     search: str | None = Query(None, description="按中名或图像编号搜索"),
     status: str | None = Query(None, description="按状态筛选"),
+    ctx: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db),
 ) -> list[dict[str, Any]]:
     """获取记录列表,支持搜索和状态筛选。"""
-    q = db.query(SpecimenRecord).filter(SpecimenRecord.status != "discarded")
+    q = db.query(SpecimenRecord).filter(
+        SpecimenRecord.owner_id == ctx.owner_id,
+        SpecimenRecord.status != "discarded",
+    )
 
     if search:
         keyword = f"%{search.strip()}%"
@@ -49,10 +54,14 @@ async def list_records(
 @router.get("/{record_id}")
 async def get_record(
     record_id: int,
+    ctx: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """获取记录详情。"""
-    record = db.get(SpecimenRecord, record_id)
+    record = db.query(SpecimenRecord).filter(
+        SpecimenRecord.id == record_id,
+        SpecimenRecord.owner_id == ctx.owner_id,
+    ).first()
     if record is None:
         raise HTTPException(status_code=404, detail="记录不存在")
     return svc.record_to_detail(record)
@@ -62,6 +71,7 @@ async def get_record(
 async def update_record(
     record_id: int,
     req: RecordUpdate,
+    ctx: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """编辑记录。
@@ -69,7 +79,10 @@ async def update_record(
     如果修改了分类字段且通过校验,同步更新 taxonomy_cache。
     如果修改了中名,清除旧的 confirmed_extraction 并允许重新分类。
     """
-    record = db.get(SpecimenRecord, record_id)
+    record = db.query(SpecimenRecord).filter(
+        SpecimenRecord.id == record_id,
+        SpecimenRecord.owner_id == ctx.owner_id,
+    ).first()
     if record is None:
         raise HTTPException(status_code=404, detail="记录不存在")
 
@@ -91,7 +104,12 @@ async def update_record(
             errors = svc.validate_taxonomy(taxonomy)
             if not errors:
                 # 校验通过,更新缓存
-                svc._update_taxonomy_cache(db, new_zhongming, taxonomy)
+                svc._update_taxonomy_cache(
+                    db,
+                    record.owner_id,
+                    new_zhongming,
+                    taxonomy,
+                )
             # 校验不通过时不报错,只不更新缓存(用户可以在记录管理继续编辑)
 
         db.commit()
@@ -103,10 +121,14 @@ async def update_record(
 @router.delete("/{record_id}")
 async def delete_record(
     record_id: int,
+    ctx: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db),
 ) -> dict[str, str]:
     """删除记录。"""
-    record = db.get(SpecimenRecord, record_id)
+    record = db.query(SpecimenRecord).filter(
+        SpecimenRecord.id == record_id,
+        SpecimenRecord.owner_id == ctx.owner_id,
+    ).first()
     if record is None:
         raise HTTPException(status_code=404, detail="记录不存在")
 
@@ -124,7 +146,9 @@ async def delete_record(
             proc_file.unlink(missing_ok=True)
 
     materials_service.reset_item_for_deleted_record(db, record_id)
-    db.delete(record)
+    from app.services import quota_service
+    quota_service.release(db, record_id)
+    record.status = "discarded"
     db.commit()
     return {"status": "deleted"}
 
@@ -132,13 +156,17 @@ async def delete_record(
 @router.post("/{record_id}/reclassify")
 async def reclassify_record(
     record_id: int,
+    ctx: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """对记录重新执行分类(不重新识别图片)。
 
     清单 8.4: 只允许对已经保存 confirmed_extraction_json 的记录重新分类。
     """
-    record = db.get(SpecimenRecord, record_id)
+    record = db.query(SpecimenRecord).filter(
+        SpecimenRecord.id == record_id,
+        SpecimenRecord.owner_id == ctx.owner_id,
+    ).first()
     if record is None:
         raise HTTPException(status_code=404, detail="记录不存在")
 
@@ -166,7 +194,10 @@ async def reclassify_record(
 
     template = (
         db.query(ExcelTemplate)
-        .filter(ExcelTemplate.is_active == True)  # noqa: E712
+        .filter(
+            ExcelTemplate.owner_id == ctx.owner_id,
+            ExcelTemplate.is_active == True,  # noqa: E712
+        )
         .first()
     )
     excel_row = None
@@ -175,6 +206,7 @@ async def reclassify_record(
             db.query(SpecimenRecord)
             .filter(
                 SpecimenRecord.status == STATUS_COMPLETED,
+                SpecimenRecord.owner_id == ctx.owner_id,
                 SpecimenRecord.id <= result.id,
             )
             .count()

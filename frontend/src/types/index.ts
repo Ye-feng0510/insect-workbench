@@ -6,6 +6,52 @@ export interface ModelConfig {
   model_name: string
 }
 
+export type UserRole = 'admin' | 'user'
+
+export interface AuthUser {
+  id: number
+  username: string
+  role: UserRole
+  is_active: boolean
+  workflow_quota: number | null
+  workflow_reserved: number
+  workflow_charged: number
+  created_at?: string
+  last_login_at?: string | null
+}
+
+export interface LoginResponse {
+  user: AuthUser
+  csrf_token?: string
+}
+
+export interface CreateUserRequest {
+  username: string
+  password: string
+  role: UserRole
+  workflow_quota: number | null
+}
+
+export interface QuotaAdjustment {
+  id: number
+  user_id: number
+  actor_user_id: number
+  old_quota: number | null
+  new_quota: number | null
+  reason: string
+  created_at: string
+}
+
+export interface WorkflowUsage {
+  id: number
+  user_id: number
+  record_id: number | null
+  status: 'reserved' | 'charged' | 'released'
+  reserved_at: string
+  charged_at: string | null
+  released_at: string | null
+}
+
 export interface PromptConfig {
   recognition_prompt: string
   taxonomy_prompt: string

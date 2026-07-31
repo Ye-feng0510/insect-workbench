@@ -26,6 +26,7 @@ import {
 } from '@/services/materials'
 import { extractErrorMessage } from '@/types'
 import type { MaterialItemInfo, MaterialSummary } from '@/types'
+import { downloadAuthenticatedAsset } from '@/services/assets'
 
 export default function MaterialsPage() {
   const navigate = useNavigate()
@@ -37,6 +38,7 @@ export default function MaterialsPage() {
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [downloadingSkipped, setDownloadingSkipped] = useState(false)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [dragging, setDragging] = useState(false)
 
@@ -108,6 +110,20 @@ export default function MaterialsPage() {
     }
   }
 
+  const handleDownloadSkipped = async () => {
+    setDownloadingSkipped(true)
+    try {
+      await downloadAuthenticatedAsset(
+        skippedMaterialsExportUrl,
+        'skipped-materials.zip',
+      )
+    } catch (error) {
+      show(extractErrorMessage(error, '下载跳过素材失败'), 'error')
+    } finally {
+      setDownloadingSkipped(false)
+    }
+  }
+
   const handledCount = (summary?.completed_count ?? 0) + (summary?.skipped_count ?? 0)
   const progress = summary?.total_count
     ? Math.round((handledCount / summary.total_count) * 100)
@@ -172,7 +188,20 @@ export default function MaterialsPage() {
               <h2 className="font-semibold text-gray-700">上传素材压缩包</h2>
             </div>
             <div
+              role="button"
+              tabIndex={0}
+              aria-label="上传素材压缩包"
               onClick={() => !uploading && fileRef.current?.click()}
+              onKeyDown={(event) => {
+                if (
+                  event.target === event.currentTarget
+                  && !uploading
+                  && (event.key === 'Enter' || event.key === ' ')
+                ) {
+                  event.preventDefault()
+                  fileRef.current?.click()
+                }
+              }}
               onDragOver={(event) => {
                 event.preventDefault()
                 setDragging(true)
@@ -304,20 +333,21 @@ export default function MaterialsPage() {
             </div>
           )}
 
-          <a
-            href={summary?.skipped_count ? skippedMaterialsExportUrl : undefined}
-            onClick={(event) => {
-              if (!summary?.skipped_count) event.preventDefault()
-            }}
+          <button
+            type="button"
+            disabled={!summary?.skipped_count || downloadingSkipped}
+            onClick={() => void handleDownloadSkipped()}
             className={`mt-4 flex w-full items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium ${
               summary?.skipped_count
                 ? 'bg-amber-500 text-white hover:bg-amber-600'
                 : 'cursor-not-allowed bg-gray-100 text-gray-400'
             }`}
           >
-            <Download className="h-4 w-4" />
-            导出所有跳过素材 ZIP
-          </a>
+            {downloadingSkipped
+              ? <Loader2 className="h-4 w-4 animate-spin" />
+              : <Download className="h-4 w-4" />}
+            {downloadingSkipped ? '正在下载...' : '导出所有跳过素材 ZIP'}
+          </button>
         </div>
       </div>
 

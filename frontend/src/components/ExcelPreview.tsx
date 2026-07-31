@@ -4,6 +4,7 @@ import { Loader2, Columns3, List, RefreshCw, TableProperties } from 'lucide-reac
 import { useToast } from '@/components/Toast'
 import EmptyState from '@/components/EmptyState'
 import { getPreview } from '@/services/preview'
+import { getCurrentTemplate } from '@/services/templates'
 import { extractErrorMessage } from '@/types'
 import type { PreviewResponse } from '@/types'
 
@@ -27,6 +28,11 @@ export default function ExcelPreview({ draftRow, highlightRow, autoScroll = true
   const loadPreview = useCallback(async () => {
     setLoading(true)
     try {
+      const template = await getCurrentTemplate()
+      if (!template?.target_sheet) {
+        setData(null)
+        return
+      }
       const result = await getPreview(mode)
       setData(result)
     } catch (e) {

@@ -6,6 +6,7 @@ import TemplateSettings from '@/components/TemplateSettings'
 import type { LayoutOutletContext } from '@/components/Layout'
 import { getExportSummary, exportExcel } from '@/services/export'
 import { extractErrorMessage, type ExportSummary, type TemplateInfo } from '@/types'
+import { downloadAuthenticatedAsset } from '@/services/assets'
 
 export default function ExportPage() {
   const { show } = useToast()
@@ -13,7 +14,12 @@ export default function ExportPage() {
   const [summary, setSummary] = useState<ExportSummary | null>(null)
   const [loading, setLoading] = useState(true)
   const [exporting, setExporting] = useState(false)
-  const [lastExport, setLastExport] = useState<{ url: string; count: number } | null>(null)
+  const [downloadingExport, setDownloadingExport] = useState(false)
+  const [lastExport, setLastExport] = useState<{
+    url: string
+    filename: string
+    count: number
+  } | null>(null)
   const summaryRequestRef = useRef(0)
 
   const loadSummary = useCallback(async () => {
@@ -61,12 +67,28 @@ export default function ExportPage() {
     setExporting(true)
     try {
       const result = await exportExcel()
-      setLastExport({ url: result.download_url, count: result.record_count })
+      setLastExport({
+        url: result.download_url,
+        filename: result.filename,
+        count: result.record_count,
+      })
       show(`已导出 ${result.record_count} 条记录`, 'success')
     } catch (e) {
       show(extractErrorMessage(e, '导出失败'), 'error')
     } finally {
       setExporting(false)
+    }
+  }
+
+  const handleDownloadExport = async () => {
+    if (!lastExport) return
+    setDownloadingExport(true)
+    try {
+      await downloadAuthenticatedAsset(lastExport.url, lastExport.filename)
+    } catch (error) {
+      show(extractErrorMessage(error, '下载导出文件失败'), 'error')
+    } finally {
+      setDownloadingExport(false)
     }
   }
 
@@ -171,13 +193,17 @@ export default function ExportPage() {
             <p className="text-sm font-medium text-emerald-800">
               导出成功 ({lastExport.count} 条记录)
             </p>
-            <a
-              href={lastExport.url}
-              className="mt-1 flex items-center gap-1 text-xs text-emerald-600 hover:underline"
+            <button
+              type="button"
+              onClick={() => void handleDownloadExport()}
+              disabled={downloadingExport}
+              className="mt-1 flex items-center gap-1 text-xs text-emerald-600 hover:underline disabled:opacity-50"
             >
-              <FileSpreadsheet className="h-3 w-3" />
-              点击下载文件
-            </a>
+              {downloadingExport
+                ? <Loader2 className="h-3 w-3 animate-spin" />
+                : <FileSpreadsheet className="h-3 w-3" />}
+              {downloadingExport ? '正在下载...' : '点击下载文件'}
+            </button>
           </div>
         </div>
       )}

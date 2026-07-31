@@ -44,23 +44,40 @@ from app.models import (
 from app.services import recognition_service
 
 
+def resolve_material_image_path(stored_path: str) -> Path:
+    stored = Path(stored_path)
+    if stored.is_file():
+        return stored
+    normalized = stored_path.replace("\\", "/")
+    marker = "/materials/images/"
+    if marker in normalized:
+        portable = MATERIAL_IMAGES_DIR / normalized.split(marker, 1)[1]
+        if portable.is_file():
+            return portable
+    matches = list(MATERIAL_IMAGES_DIR.rglob(stored.name))
+    return matches[0] if len(matches) == 1 else stored
+
+
 ALLOWED_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
 ZIP_EOCD_SIGNATURE = b"PK\x05\x06"
 ZIP64_LOCATOR_SIGNATURE = b"PK\x06\x07"
 ZIP64_EOCD_SIGNATURE = b"PK\x06\x06"
 
 
-def get_active_batch(db: Session) -> MaterialBatch | None:
+def get_active_batch(db: Session, owner_id: int) -> MaterialBatch | None:
     return (
         db.query(MaterialBatch)
-        .filter(MaterialBatch.is_active.is_(True))
+        .filter(
+            MaterialBatch.owner_id == owner_id,
+            MaterialBatch.is_active.is_(True),
+        )
         .order_by(MaterialBatch.id.desc())
         .first()
     )
 
 
-def get_summary(db: Session) -> dict[str, Any]:
-    batch = get_active_batch(db)
+def get_summary(db: Session, owner_id: int) -> dict[str, Any]:
+    batch = get_active_batch(db, owner_id)
     summary: dict[str, Any] = {
         "batch": batch,
         "total_count": 0,
@@ -202,6 +219,7 @@ def create_batch_from_zip_path(
     db: Session,
     source_path: Path,
     original_filename: str,
+    owner_id: int,
 ) -> dict[str, Any]:
     if Path(original_filename).suffix.lower() != ".zip":
         raise HTTPException(status_code=400, detail="请上传 ZIP 格式的素材压缩包")
@@ -239,7 +257,7 @@ def create_batch_from_zip_path(
             with zf.open(info) as source, stored_path.open("wb") as target:
                 shutil.copyfileobj(source, target)
             try:
-                with Image.open(stored_path) as image:
+                with Image.open(resolve_material_image_path(str(stored_path))) as image:
                     if (
                         image.width * image.height
                         > settings.material_image_max_pixels
@@ -268,11 +286,15 @@ def create_batch_from_zip_path(
 
         zf.close()
         shutil.move(str(source_path), zip_path)
-        db.query(MaterialBatch).filter(MaterialBatch.is_active.is_(True)).update(
+        db.query(MaterialBatch).filter(
+            MaterialBatch.owner_id == owner_id,
+            MaterialBatch.is_active.is_(True),
+        ).update(
             {MaterialBatch.is_active: False},
             synchronize_session=False,
         )
         batch = MaterialBatch(
+            owner_id=owner_id,
             original_filename=Path(original_filename).name,
             stored_zip_path=str(zip_path),
             extract_dir=str(extract_dir),
@@ -296,7 +318,7 @@ def create_batch_from_zip_path(
         )
         db.commit()
         db.refresh(batch)
-        return get_summary(db)
+        return get_summary(db, owner_id)
     except Exception:
         db.rollback()
         zip_path.unlink(missing_ok=True)
@@ -311,12 +333,15 @@ def create_batch_from_zip(
     db: Session,
     content: bytes,
     original_filename: str,
+    owner_id: int,
 ) -> dict[str, Any]:
     """字节输入包装,主要供服务层测试使用。"""
     source_path = MATERIAL_ZIPS_DIR / f"incoming_{uuid.uuid4().hex}.zip"
     source_path.write_bytes(content)
     try:
-        return create_batch_from_zip_path(db, source_path, original_filename)
+        return create_batch_from_zip_path(
+            db, source_path, original_filename, owner_id
+        )
     finally:
         source_path.unlink(missing_ok=True)
 
@@ -325,8 +350,11 @@ def list_items(
     db: Session,
     status: str | None = None,
     limit: int = 200,
+    owner_id: int | None = None,
 ) -> list[MaterialItem]:
-    batch = get_active_batch(db)
+    if owner_id is None:
+        raise ValueError("owner_id is required")
+    batch = get_active_batch(db, owner_id)
     if batch is None:
         return []
     query = db.query(MaterialItem).filter(MaterialItem.batch_id == batch.id)
@@ -335,17 +363,21 @@ def list_items(
     return query.order_by(MaterialItem.sequence.asc()).limit(limit).all()
 
 
-def get_linked_item(db: Session, record_id: int) -> MaterialItem | None:
-    return (
+def get_linked_item(
+    db: Session, record_id: int, owner_id: int | None = None
+) -> MaterialItem | None:
+    query = (
         db.query(MaterialItem)
+        .join(MaterialBatch, MaterialBatch.id == MaterialItem.batch_id)
         .filter(MaterialItem.record_id == record_id)
-        .order_by(MaterialItem.id.desc())
-        .first()
     )
+    if owner_id is not None:
+        query = query.filter(MaterialBatch.owner_id == owner_id)
+    return query.order_by(MaterialItem.id.desc()).first()
 
 
 def _copy_for_recognition(item: MaterialItem) -> str:
-    source = Path(item.stored_path)
+    source = resolve_material_image_path(item.stored_path)
     if not source.exists():
         raise HTTPException(status_code=404, detail="素材图片文件不存在")
     stored_name = f"img_{uuid.uuid4().hex[:8]}{source.suffix.lower()}"
@@ -357,10 +389,13 @@ def _copy_for_recognition(item: MaterialItem) -> str:
 async def start_next_item(
     db: Session,
     rotation_degrees: int = 0,
+    owner_id: int | None = None,
 ) -> tuple[MaterialItem, SpecimenRecord]:
-    active_draft = recognition_service.get_active_draft(db)
+    if owner_id is None:
+        raise ValueError("owner_id is required")
+    active_draft = recognition_service.get_active_draft(db, owner_id)
     if active_draft is not None:
-        linked = get_linked_item(db, active_draft.id)
+        linked = get_linked_item(db, active_draft.id, owner_id)
         if linked is not None:
             return linked, active_draft
         raise HTTPException(
@@ -368,7 +403,7 @@ async def start_next_item(
             detail="工作台存在手动上传的未完成草稿,请先完成或清空后再处理素材包",
         )
 
-    batch = get_active_batch(db)
+    batch = get_active_batch(db, owner_id)
     if batch is None:
         raise HTTPException(status_code=404, detail="尚未上传数据素材压缩包")
     item = (
@@ -406,6 +441,7 @@ async def start_next_item(
     ):
         image_path = _copy_for_recognition(item)
         record = SpecimenRecord(
+            owner_id=owner_id,
             image_filename=item.original_filename,
             image_path=image_path,
             rotation_degrees=rotation_degrees % 360,
@@ -415,7 +451,12 @@ async def start_next_item(
         item.record_id = record.id
         item.status = MATERIAL_STATUS_PROCESSING
         item.error_message = ""
-        db.commit()
+        from app.services import quota_service
+        try:
+            quota_service.reserve(db, owner_id, record.id)
+        except Exception:
+            Path(image_path).unlink(missing_ok=True)
+            raise
 
         try:
             precomputed = json.loads(pf.result_json)
@@ -465,6 +506,7 @@ async def start_next_item(
             if pf_refresh.status == PREFETCH_STATUS_READY and pf_refresh.result_json:
                 image_path = _copy_for_recognition(item)
                 record = SpecimenRecord(
+                    owner_id=owner_id,
                     image_filename=item.original_filename,
                     image_path=image_path,
                     rotation_degrees=rotation_degrees % 360,
@@ -474,7 +516,12 @@ async def start_next_item(
                 item.record_id = record.id
                 item.status = MATERIAL_STATUS_PROCESSING
                 item.error_message = ""
-                db.commit()
+                from app.services import quota_service
+                try:
+                    quota_service.reserve(db, owner_id, record.id)
+                except Exception:
+                    Path(image_path).unlink(missing_ok=True)
+                    raise
 
                 try:
                     precomputed = json.loads(pf_refresh.result_json)
@@ -502,6 +549,7 @@ async def start_next_item(
     # 正常同步识别（无缓存、缓存无效或预加载失败时）
     image_path = _copy_for_recognition(item)
     record = SpecimenRecord(
+        owner_id=owner_id,
         image_filename=item.original_filename,
         image_path=image_path,
         rotation_degrees=rotation_degrees % 360,
@@ -511,7 +559,12 @@ async def start_next_item(
     item.record_id = record.id
     item.status = MATERIAL_STATUS_PROCESSING
     item.error_message = ""
-    db.commit()
+    from app.services import quota_service
+    try:
+        quota_service.reserve(db, owner_id, record.id)
+    except Exception:
+        Path(image_path).unlink(missing_ok=True)
+        raise
 
     try:
         record = await recognition_service.extract_image_info(
@@ -541,6 +594,8 @@ def _handle_extraction_failure(
     item.status = MATERIAL_STATUS_FAILED
     item.error_message = str(getattr(exc, "detail", exc))
     record.warnings_json = json.dumps([item.error_message], ensure_ascii=False)
+    from app.services import quota_service
+    quota_service.release(db, record.id)
     db.commit()
 
 
@@ -553,20 +608,22 @@ def _notify_prefetch_worker() -> None:
         pass
 
 
-def skip_item(db: Session, item_id: int) -> dict[str, Any]:
+def skip_item(db: Session, item_id: int, owner_id: int) -> dict[str, Any]:
     item = db.get(MaterialItem, item_id)
-    batch = get_active_batch(db)
+    batch = get_active_batch(db, owner_id)
     if item is None or batch is None or item.batch_id != batch.id:
         raise HTTPException(status_code=404, detail="素材图片不存在")
     if item.status == MATERIAL_STATUS_COMPLETED:
         raise HTTPException(status_code=409, detail="已完成的素材不能跳过")
     if item.status == MATERIAL_STATUS_SKIPPED:
-        return get_summary(db)
+        return get_summary(db, owner_id)
 
     if item.record_id is not None:
         record = db.get(SpecimenRecord, item.record_id)
         if record is not None and record.status != "completed":
             record.status = STATUS_DISCARDED
+            from app.services import quota_service
+            quota_service.release(db, record.id)
             if record.image_path:
                 Path(record.image_path).unlink(missing_ok=True)
 
@@ -579,7 +636,7 @@ def skip_item(db: Session, item_id: int) -> dict[str, Any]:
     item.error_message = ""
     db.commit()
     _notify_prefetch_worker()
-    return get_summary(db)
+    return get_summary(db, owner_id)
 
 
 def reset_item_for_deleted_record(db: Session, record_id: int) -> None:
@@ -595,8 +652,8 @@ def reset_item_for_deleted_record(db: Session, record_id: int) -> None:
     db.flush()
 
 
-def create_skipped_export(db: Session) -> tuple[Path, int]:
-    batch = get_active_batch(db)
+def create_skipped_export(db: Session, owner_id: int) -> tuple[Path, int]:
+    batch = get_active_batch(db, owner_id)
     if batch is None:
         raise HTTPException(status_code=404, detail="尚未上传数据素材压缩包")
     skipped = (
@@ -616,13 +673,13 @@ def create_skipped_export(db: Session) -> tuple[Path, int]:
     )
     with zipfile.ZipFile(export_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for item in skipped:
-            source = Path(item.stored_path)
+            source = resolve_material_image_path(item.stored_path)
             if source.exists():
                 zf.write(source, arcname=item.archive_path)
     return export_path, len(skipped)
 
 
-def delete_batch(db: Session) -> dict[str, Any]:
+def delete_batch(db: Session, owner_id: int) -> dict[str, Any]:
     """删除当前活跃批次及其全部素材项和磁盘文件。
 
     安全规则:
@@ -631,7 +688,7 @@ def delete_batch(db: Session) -> dict[str, Any]:
     - 级联删除全部 MaterialItem
     - 清理解压目录和存储的 ZIP 文件
     """
-    batch = get_active_batch(db)
+    batch = get_active_batch(db, owner_id)
     if batch is None:
         raise HTTPException(status_code=404, detail="没有可删除的素材批次")
 
@@ -661,6 +718,8 @@ def delete_batch(db: Session) -> dict[str, Any]:
         record = db.get(SpecimenRecord, item.record_id)
         if record is not None and record.status in ACTIVE_DRAFT_STATUSES:
             record.status = STATUS_DISCARDED
+            from app.services import quota_service
+            quota_service.release(db, record.id)
             if record.image_path:
                 Path(record.image_path).unlink(missing_ok=True)
 
@@ -682,12 +741,12 @@ def delete_batch(db: Session) -> dict[str, Any]:
         Path(zip_path).unlink(missing_ok=True)
 
     _notify_prefetch_worker()
-    return get_summary(db)
+    return get_summary(db, owner_id)
 
 
-def get_prefetch_status(db: Session) -> dict[str, Any]:
+def get_prefetch_status(db: Session, owner_id: int) -> dict[str, Any]:
     """获取当前批次的预加载状态统计。"""
-    batch = get_active_batch(db)
+    batch = get_active_batch(db, owner_id)
     if batch is None:
         return {"ready_count": 0, "running_count": 0, "failed_count": 0, "target": settings.material_prefetch_size}
 

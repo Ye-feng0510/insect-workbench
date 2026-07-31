@@ -4,6 +4,12 @@ services:
     container_name: insect-workbench
     ports:
       - "8000:8000"
+    environment:
+      INSECT_BOOTSTRAP_ADMIN_USERNAME: ${INSECT_BOOTSTRAP_ADMIN_USERNAME:-}
+      INSECT_BOOTSTRAP_ADMIN_PASSWORD: ${INSECT_BOOTSTRAP_ADMIN_PASSWORD:-}
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
+      AUTH_SESSION_HOURS: ${AUTH_SESSION_HOURS:-24}
+      DEFAULT_USER_QUOTA: ${DEFAULT_USER_QUOTA:-100}
     volumes:
       # 数据持久化: 容器内 /app/data 映射到宿主机 ./data
       - ./data:/app/data

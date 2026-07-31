@@ -27,6 +27,8 @@ from app.models import (
     PREFETCH_STATUS_QUEUED,
     PREFETCH_STATUS_READY,
     PREFETCH_STATUS_RUNNING,
+    ROLE_ADMIN,
+    User,
 )
 from app.services import recognition_service
 
@@ -77,6 +79,7 @@ class PrefetchWorker:
         self._stop_event = asyncio.Event()
         self._wakeup_event = asyncio.Event()
         self._semaphore: asyncio.Semaphore | None = None
+        self._last_batch_id: int = 0
 
     async def start(self) -> None:
         global _global_worker
@@ -155,13 +158,31 @@ class PrefetchWorker:
 
         db = SessionLocal()
         try:
-            batch = (
+            batches = (
                 db.query(MaterialBatch)
+                .join(User, User.id == MaterialBatch.owner_id)
                 .filter(MaterialBatch.is_active.is_(True))
-                .order_by(MaterialBatch.id.desc())
-                .first()
+                .filter(User.is_active.is_(True))
+                .filter(
+                    (User.role == ROLE_ADMIN)
+                    | (User.workflow_quota.is_(None))
+                    | (
+                        User.workflow_reserved + User.workflow_charged
+                        < User.workflow_quota
+                    )
+                )
+                .order_by(MaterialBatch.id.asc())
+                .all()
             )
-            if batch is None:
+            if not batches:
+                return
+            batch = next(
+                (candidate for candidate in batches if candidate.id > self._last_batch_id),
+                batches[0],
+            )
+            self._last_batch_id = batch.id
+            owner = db.get(User, batch.owner_id)
+            if owner is None:
                 return
 
             # 清理指纹不匹配的旧结果
@@ -222,8 +243,21 @@ class PrefetchWorker:
                 .count()
             )
 
-            max_lookahead = settings.material_prefetch_max_lookahead
             target = settings.material_prefetch_size
+            if owner.role == ROLE_ADMIN or owner.workflow_quota is None:
+                remaining = target
+            else:
+                remaining = max(
+                    0,
+                    owner.workflow_quota
+                    - owner.workflow_reserved
+                    - owner.workflow_charged,
+                )
+            max_lookahead = min(
+                settings.material_prefetch_max_lookahead,
+                target,
+                remaining,
+            )
 
             # 如果已达高水位或最大前瞻，不再创建新任务
             if active_count >= max_lookahead or ready_count >= target:
@@ -279,6 +313,7 @@ class PrefetchWorker:
                     MaterialPrefetchResult.status == PREFETCH_STATUS_QUEUED,
                     MaterialPrefetchResult.config_fingerprint == fingerprint,
                 )
+                .limit(settings.material_prefetch_concurrency)
                 .all()
             )
         finally:
@@ -320,6 +355,23 @@ class PrefetchWorker:
                 db.delete(pf)
                 db.commit()
                 return False
+            batch = db.get(MaterialBatch, fresh.batch_id)
+            owner = db.get(User, batch.owner_id) if batch is not None else None
+            if (
+                batch is None
+                or not batch.is_active
+                or owner is None
+                or not owner.is_active
+                or (
+                    owner.role != ROLE_ADMIN
+                    and owner.workflow_quota is not None
+                    and owner.workflow_reserved + owner.workflow_charged
+                    >= owner.workflow_quota
+                )
+            ):
+                db.delete(pf)
+                db.commit()
+                return False
 
             pf.status = PREFETCH_STATUS_RUNNING
             pf.attempt_count = (pf.attempt_count or 0) + 1
@@ -332,8 +384,8 @@ class PrefetchWorker:
             db.close()
 
         # 调用模型（在独立 DB session 中）
-        from pathlib import Path
-        source = Path(stored_path)
+        from app.services.materials_service import resolve_material_image_path
+        source = resolve_material_image_path(stored_path)
         if not source.exists():
             self._mark_failed(pf_id, "素材图片文件不存在")
             return False
@@ -348,7 +400,7 @@ class PrefetchWorker:
             finally:
                 db2.close()
 
-            result = await client.recognize_image(stored_path, prompt, 0)
+            result = await client.recognize_image(str(source), prompt, 0)
         except Exception as exc:
             self._mark_failed(pf_id, str(getattr(exc, "detail", exc)))
             return False
@@ -362,6 +414,12 @@ class PrefetchWorker:
 
             re_check = db3.get(MaterialItem, item_id)
             if re_check is None or re_check.status != MATERIAL_STATUS_PENDING:
+                db3.delete(pf)
+                db3.commit()
+                return False
+            batch = db3.get(MaterialBatch, re_check.batch_id)
+            owner = db3.get(User, batch.owner_id) if batch is not None else None
+            if batch is None or owner is None or not owner.is_active:
                 db3.delete(pf)
                 db3.commit()
                 return False

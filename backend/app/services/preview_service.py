@@ -18,20 +18,23 @@ from sqlalchemy.orm import Session
 
 from app.field_mapping import ALL_TARGET_FIELDS
 from app.models import ExcelTemplate, SpecimenRecord, STATUS_COMPLETED
-from app.services import recognition_service
+from app.services import recognition_service, template_service
 
 
-def _get_active_template_or_400(db: Session) -> ExcelTemplate:
+def _get_active_template_or_400(db: Session, owner_id: int) -> ExcelTemplate:
     """获取活跃模板,不存在则 400。"""
     template = (
         db.query(ExcelTemplate)
-        .filter(ExcelTemplate.is_active == True)  # noqa: E712
+        .filter(
+            ExcelTemplate.owner_id == owner_id,
+            ExcelTemplate.is_active == True,  # noqa: E712
+        )
         .first()
     )
     if template is None or not template.target_sheet:
         raise HTTPException(
             status_code=400,
-            detail="尚未配置 Excel 模板,请先在设置页面上传模板并保存字段映射",
+            detail="尚未配置 Excel 模板,请先在“模板与导出”页面上传模板并保存字段映射",
         )
     return template
 
@@ -40,17 +43,24 @@ def get_preview(
     db: Session,
     mode: str = "target",
     limit: int = 100,
+    owner_id: int | None = None,
 ) -> dict[str, Any]:
     """生成 Excel 预览数据。
 
     清单第 8.6 节返回结构。
     """
-    template = _get_active_template_or_400(db)
+    if owner_id is None:
+        raise ValueError("owner_id is required")
+    template = _get_active_template_or_400(db, owner_id)
     field_mapping = json.loads(template.field_mapping_json)
 
     # 读取模板表头和已有数据
     try:
-        wb = load_workbook(template.stored_path, read_only=True, data_only=True)
+        wb = load_workbook(
+            template_service.resolve_template_path(template),
+            read_only=True,
+            data_only=True,
+        )
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"读取模板失败: {e}")
 
@@ -100,7 +110,10 @@ def get_preview(
     # 读取已完成记录(按 id 升序)
     completed_records = (
         db.query(SpecimenRecord)
-        .filter(SpecimenRecord.status == STATUS_COMPLETED)
+        .filter(
+            SpecimenRecord.owner_id == owner_id,
+            SpecimenRecord.status == STATUS_COMPLETED,
+        )
         .order_by(SpecimenRecord.id.asc())
         .all()
     )

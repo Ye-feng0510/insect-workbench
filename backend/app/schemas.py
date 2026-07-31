@@ -7,6 +7,45 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
+class LoginRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=100)
+    password: str = Field(min_length=1, max_length=500)
+
+
+class UserInfo(BaseModel):
+    id: int
+    username: str
+    role: str
+    is_active: bool
+    workflow_quota: int | None
+    workflow_reserved: int
+    workflow_charged: int
+
+    model_config = {"from_attributes": True}
+
+
+class LoginResponse(BaseModel):
+    user: UserInfo
+    csrf_token: str
+
+
+class UserCreate(BaseModel):
+    username: str = Field(min_length=1, max_length=100)
+    password: str = Field(min_length=12, max_length=500)
+    role: str = "user"
+    workflow_quota: int | None = Field(default=None, ge=0)
+
+
+class UserUpdate(BaseModel):
+    is_active: bool | None = None
+    password: str | None = Field(default=None, min_length=12, max_length=500)
+
+
+class QuotaUpdate(BaseModel):
+    workflow_quota: int | None = Field(default=None, ge=0)
+    reason: str = Field(default="", max_length=500)
+
+
 # ============================================================
 # 设置
 # ============================================================

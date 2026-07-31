@@ -24,6 +24,8 @@ from app.models import (
     MaterialItem,
     SpecimenRecord,
     TaxonomyCache,
+    User,
+    ROLE_ADMIN,
 )
 from app.routers import materials as materials_router
 from app.services import materials_service
@@ -52,6 +54,18 @@ def materials_client(tmp_path, monkeypatch):
     )
     Base.metadata.create_all(engine)
     TestSession = sessionmaker(bind=engine)
+    seed = TestSession()
+    seed.add(
+        User(
+            id=1,
+            username="test-admin",
+            password_hash="test-only",
+            role=ROLE_ADMIN,
+            workflow_quota=None,
+        )
+    )
+    seed.commit()
+    seed.close()
 
     zip_dir = tmp_path / "zips"
     image_dir = tmp_path / "material_images"
@@ -404,6 +418,7 @@ def test_duplicate_replace_keeps_material_link(materials_client, monkeypatch):
         [
             existing,
             TaxonomyCache(
+                owner_id=1,
                 zhongming="重复素材",
                 phylum="Arthropoda",
                 gang="昆虫纲",
@@ -607,8 +622,14 @@ def test_consume_prefetch_result_in_next_extract(materials_client, monkeypatch):
 
     async def _fake_complete_taxonomy(*args, **kwargs):
         return {
-            "phylum": "", "纲": "", "Class": "", "Order": "",
-            "中文科名": "", "科名": "", "属名": "", "种名": "",
+            "Phylum": "Arthropoda",
+            "纲": "昆虫纲",
+            "Class": "Insecta",
+            "Order": "Coleoptera",
+            "中文科名": "瓢虫科",
+            "科名": "Coccinellidae",
+            "属名": "Harmonia",
+            "种名": "axyridis",
         }
 
     async def fake_extract_with_precomputed(

@@ -1,5 +1,6 @@
 """应用配置。所有可配置项通过环境变量传入,不硬编码。"""
 from pathlib import Path
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -61,6 +62,21 @@ class Settings(BaseSettings):
 
     # 开发模式: 前端独立运行时允许跨域
     cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
+
+    # 认证。首次启动必须通过环境变量提供管理员凭据。
+    auth_cookie_name: str = "insect_session"
+    auth_csrf_cookie_name: str = "insect_csrf"
+    auth_session_hours: int = 24
+    auth_login_max_failures: int = 5
+    auth_login_window_seconds: int = 300
+    auth_cookie_secure: bool = False
+    bootstrap_admin_username: str = Field(
+        default="", validation_alias="INSECT_BOOTSTRAP_ADMIN_USERNAME"
+    )
+    bootstrap_admin_password: str = Field(
+        default="", validation_alias="INSECT_BOOTSTRAP_ADMIN_PASSWORD"
+    )
+    default_user_quota: int = 100
 
 
 settings = Settings()
