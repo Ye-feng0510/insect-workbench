@@ -18,7 +18,17 @@ from app.models import ExportArtifact, ROLE_ADMIN, User
 LATEST_SCHEMA_VERSION = 3
 
 
-def bootstrap_admin(db: Session) -> User:
+def _validate_new_admin_credentials(username: str, password: str) -> None:
+    if not username or not password:
+        raise RuntimeError(
+            "首次启动必须设置 INSECT_BOOTSTRAP_ADMIN_USERNAME 和 "
+            "INSECT_BOOTSTRAP_ADMIN_PASSWORD（密码至少 12 位）"
+        )
+    if len(password) < 12:
+        raise RuntimeError("密码至少需要 12 个字符")
+
+
+def bootstrap_admin(db: Session, *, create: bool = True) -> User | None:
     username = settings.bootstrap_admin_username.strip()
     password = settings.bootstrap_admin_password
     if username:
@@ -35,11 +45,9 @@ def bootstrap_admin(db: Session) -> User:
     )
     if existing_admin is not None:
         return existing_admin
-    if not username or not password:
-        raise RuntimeError(
-            "首次启动必须设置 INSECT_BOOTSTRAP_ADMIN_USERNAME 和 "
-            "INSECT_BOOTSTRAP_ADMIN_PASSWORD（密码至少 12 位）"
-        )
+    _validate_new_admin_credentials(username, password)
+    if not create:
+        return None
     try:
         password_hash = hash_password(password)
     except ValueError as exc:
@@ -55,6 +63,19 @@ def bootstrap_admin(db: Session) -> User:
     db.commit()
     db.refresh(admin)
     return admin
+
+
+def _preflight_bootstrap_admin(
+    engine: Engine, existing_tables: set[str]
+) -> None:
+    if "users" not in existing_tables:
+        _validate_new_admin_credentials(
+            settings.bootstrap_admin_username.strip(),
+            settings.bootstrap_admin_password,
+        )
+        return
+    with Session(engine) as db:
+        bootstrap_admin(db, create=False)
 
 
 def _backup_database(engine: Engine) -> None:
@@ -92,6 +113,7 @@ def migrate(engine: Engine) -> None:
         existing_tables
         & {"excel_templates", "specimen_records", "material_batches"}
     ) and current_version < LATEST_SCHEMA_VERSION
+    _preflight_bootstrap_admin(engine, existing_tables)
     if needs_legacy_migration:
         _backup_database(engine)
 
@@ -105,6 +127,7 @@ def migrate(engine: Engine) -> None:
 
     with Session(engine) as db:
         admin = bootstrap_admin(db)
+        assert admin is not None
         admin_id = admin.id
 
     # Create missing tables only. Existing-table ownership changes remain explicit below.

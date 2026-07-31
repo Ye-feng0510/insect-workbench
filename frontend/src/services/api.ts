@@ -28,6 +28,11 @@ export function setCsrfToken(token: string | null): void {
     sessionStorage.setItem(CSRF_STORAGE_KEY, token)
   } else {
     sessionStorage.removeItem(CSRF_STORAGE_KEY)
+    if (typeof document !== 'undefined') {
+      for (const name of ['csrf_token', 'insect_csrf', 'XSRF-TOKEN']) {
+        document.cookie = `${encodeURIComponent(name)}=; Max-Age=0; Path=/; SameSite=Strict`
+      }
+    }
   }
 }
 

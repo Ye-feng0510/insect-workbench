@@ -121,6 +121,19 @@ describe('frontend authentication and RBAC', () => {
     })
   })
 
+  it('finishes auth restoration when a stale session is rejected', async () => {
+    vi.mocked(getCurrentUser).mockReset()
+    setCsrfToken('stale-session')
+    vi.mocked(getCurrentUser).mockRejectedValueOnce(new Error('unauthorized'))
+
+    renderApp('/workbench')
+
+    expect(
+      await screen.findByRole('heading', { name: '昆虫标本工作台' }),
+    ).toBeInTheDocument()
+    expect(sessionStorage.getItem('insect-csrf-token')).toBeNull()
+  })
+
   it('hides admin navigation and never requests settings for an ordinary user', async () => {
     vi.mocked(getCurrentUser).mockReset()
     setCsrfToken('existing-session')

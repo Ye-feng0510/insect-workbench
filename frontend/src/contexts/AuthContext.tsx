@@ -47,6 +47,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     sessionStorage.removeItem(OWNER_STORAGE_KEY)
     setCsrfToken(null)
     configureOwnerHeader(false, null)
+    setLoading(false)
   }, [])
 
   const applyUser = useCallback((nextUser: AuthUser) => {

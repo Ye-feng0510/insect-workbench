@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -318,9 +318,7 @@ def test_quota_reserve_charge_release_idempotency(tmp_path):
         assert user.workflow_charged == 1
 
 
-def test_legacy_migration_assigns_bootstrap_admin(tmp_path, monkeypatch):
-    path = tmp_path / "legacy.db"
-    engine = create_engine(f"sqlite:///{path}")
+def _create_legacy_schema(engine) -> None:
     with engine.begin() as conn:
         conn.execute(text(
             "CREATE TABLE specimen_records ("
@@ -338,6 +336,91 @@ def test_legacy_migration_assigns_bootstrap_admin(tmp_path, monkeypatch):
             "INSERT INTO specimen_records(id,tuxiang,status) "
             "VALUES (1,'LEGACY-1','completed')"
         ))
+
+
+@pytest.mark.parametrize(
+    ("username", "password", "message"),
+    [
+        ("", "", "首次启动必须设置"),
+        ("bootstrap", "short", "密码至少需要 12 个字符"),
+    ],
+)
+def test_legacy_migration_validates_bootstrap_before_mutation(
+    tmp_path, monkeypatch, username, password, message
+):
+    path = tmp_path / "legacy.db"
+    engine = create_engine(f"sqlite:///{path}")
+    _create_legacy_schema(engine)
+    before_tables = set(inspect(engine).get_table_names())
+    with engine.connect() as conn:
+        before_columns = {
+            row[1]
+            for row in conn.execute(
+                text("PRAGMA table_info('specimen_records')")
+            )
+        }
+    monkeypatch.setattr(
+        "app.migrations.settings.bootstrap_admin_username", username
+    )
+    monkeypatch.setattr(
+        "app.migrations.settings.bootstrap_admin_password", password
+    )
+
+    with pytest.raises(RuntimeError, match=message):
+        migrate(engine)
+
+    assert set(inspect(engine).get_table_names()) == before_tables
+    with engine.connect() as conn:
+        after_columns = {
+            row[1]
+            for row in conn.execute(
+                text("PRAGMA table_info('specimen_records')")
+            )
+        }
+    assert after_columns == before_columns
+    assert "owner_id" not in after_columns
+    assert not list(tmp_path.glob("legacy.db.backup-*"))
+
+
+def test_partial_auth_tables_resume_legacy_migration(tmp_path, monkeypatch):
+    path = tmp_path / "legacy.db"
+    engine = create_engine(f"sqlite:///{path}")
+    _create_legacy_schema(engine)
+    for table_name in ("users", "auth_sessions", "quota_adjustments"):
+        Base.metadata.tables[table_name].create(engine, checkfirst=True)
+    monkeypatch.setattr(
+        "app.migrations.settings.bootstrap_admin_username", "bootstrap"
+    )
+    monkeypatch.setattr(
+        "app.migrations.settings.bootstrap_admin_password",
+        "bootstrap-password-123",
+    )
+
+    migrate(engine)
+
+    with engine.connect() as conn:
+        admin_id = conn.execute(
+            text("SELECT id FROM users WHERE username='bootstrap'")
+        ).scalar_one()
+        owner_id = conn.execute(
+            text("SELECT owner_id FROM specimen_records WHERE id=1")
+        ).scalar_one()
+        versions = conn.execute(
+            text("SELECT version FROM schema_version ORDER BY version")
+        ).scalars().all()
+        admin_count = conn.execute(
+            text("SELECT COUNT(*) FROM users WHERE username='bootstrap'")
+        ).scalar_one()
+    assert owner_id == admin_id
+    assert versions == [1, 2, 3]
+    assert admin_count == 1
+    assert len(list(tmp_path.glob("legacy.db.backup-*"))) == 1
+
+
+def test_legacy_migration_assigns_bootstrap_admin(tmp_path, monkeypatch):
+    path = tmp_path / "legacy.db"
+    engine = create_engine(f"sqlite:///{path}")
+    _create_legacy_schema(engine)
     monkeypatch.setattr(
         "app.migrations.settings.bootstrap_admin_username", "bootstrap"
     )
