@@ -42,3 +42,7 @@ Thumbs.db
 htmlcov/
 .pytest_cache/
 coverage/
+
+# 便携版构建产物
+.portable-build/
+portable-dist/

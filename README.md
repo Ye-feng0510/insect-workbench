@@ -23,6 +23,18 @@
 | 测试 | pytest、Vitest、Testing Library |
 | 部署 | Docker Compose，或本地 Python + Node.js |
 
+## Windows 便携版
+
+Windows 10/11 x64 用户可以在
+[v1.0.0 Release](https://github.com/Ye-feng0510/insect-workbench/releases/tag/v1.0.0)
+下载 `insect-workbench-portable-v1.0.0-windows-x64.zip`。
+
+便携版已内置 Python、后端依赖和生产前端，不需要安装 Python、Node.js
+或 Docker。完整解压后双击 `启动昆虫标本工作台.bat`，首次启动按提示创建管理员即可。
+
+业务数据保存在便携目录的 `data/`，管理员初始化配置保存在 `.env`。
+升级或移动前请同时备份这两部分。
+
 ## 快速开始
 
 ### 1. 克隆项目
