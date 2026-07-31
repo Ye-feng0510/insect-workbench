@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     material_zip_max_entries: int = 50000
     material_image_max_pixels: int = 40000000
 
+    # 后台预加载(减少工作台图片切换等待时间)
+    material_prefetch_size: int = 3
+    material_prefetch_interval: float = 2.0  # worker 轮询间隔(秒)
+
     # 开发模式: 前端独立运行时允许跨域
     cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
 

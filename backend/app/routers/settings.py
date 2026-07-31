@@ -95,6 +95,11 @@ async def update_model_settings(
         s.api_key = incoming_key.replace("*", "")
     db.commit()
     db.refresh(s)
+    # 配置变更后使预加载缓存失效
+    from app.services.prefetch_service import get_worker
+    worker = get_worker()
+    if worker is not None:
+        worker.invalidate_all()
     # 返回掩码
     masked_key = ""
     if s.api_key:
@@ -133,6 +138,11 @@ async def update_prompts(
     s.recognition_prompt = config.recognition_prompt
     s.taxonomy_prompt = config.taxonomy_prompt
     db.commit()
+    # 提示词变更后使预加载缓存失效
+    from app.services.prefetch_service import get_worker
+    worker = get_worker()
+    if worker is not None:
+        worker.invalidate_all()
     return PromptConfig(
         recognition_prompt=s.recognition_prompt,
         taxonomy_prompt=s.taxonomy_prompt,

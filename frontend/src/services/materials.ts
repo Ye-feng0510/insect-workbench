@@ -2,6 +2,7 @@ import api from './api'
 import type {
   MaterialExtractResponse,
   MaterialItemInfo,
+  MaterialPrefetchStatus,
   MaterialStatus,
   MaterialSummary,
 } from '@/types'
@@ -47,6 +48,15 @@ export async function skipMaterial(itemId: number): Promise<MaterialSummary> {
 export async function deleteMaterialBatch(): Promise<MaterialSummary> {
   const { data } = await api.delete<MaterialSummary>('/materials/batch')
   return data
+}
+
+export async function getPrefetchStatus(): Promise<MaterialPrefetchStatus> {
+  const { data } = await api.get<MaterialPrefetchStatus>('/materials/prefetch/status')
+  return data
+}
+
+export async function invalidatePrefetch(): Promise<void> {
+  await api.post('/materials/prefetch/invalidate')
 }
 
 export const skippedMaterialsExportUrl = '/api/materials/skipped/export'

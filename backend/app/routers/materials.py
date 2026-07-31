@@ -116,6 +116,22 @@ async def delete_active_batch(db: Session = Depends(get_db)):
     return materials_service.delete_batch(db)
 
 
+@router.get("/prefetch/status")
+async def prefetch_status(db: Session = Depends(get_db)):
+    """获取当前批次的预加载状态。"""
+    return materials_service.get_prefetch_status(db)
+
+
+@router.post("/prefetch/invalidate")
+async def prefetch_invalidate(db: Session = Depends(get_db)):
+    """清除所有预加载缓存(配置变更后调用)。"""
+    from app.services.prefetch_service import get_worker
+    worker = get_worker()
+    if worker is not None:
+        worker.clear_all()
+    return {"status": "ok"}
+
+
 @router.get("/skipped/export")
 async def export_skipped(db: Session = Depends(get_db)):
     export_path, count = materials_service.create_skipped_export(db)

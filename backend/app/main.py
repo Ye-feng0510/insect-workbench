@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import FRONTEND_DIST, settings
-from app.database import init_db
+from app.database import SessionLocal, init_db
 from app.routers import settings as settings_router
 from app.routers import templates as templates_router
 from app.routers import recognition as recognition_router
@@ -16,13 +16,17 @@ from app.routers import excel_preview as excel_preview_router
 from app.routers import records as records_router
 from app.routers import export as export_router
 from app.routers import materials as materials_router
+from app.services.prefetch_service import PrefetchWorker
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """启动时初始化数据库与目录。"""
+    """启动时初始化数据库与目录,启动后台预加载 worker。"""
     init_db()
+    worker = PrefetchWorker()
+    await worker.start()
     yield
+    await worker.stop()
 
 
 app = FastAPI(

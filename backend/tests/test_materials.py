@@ -561,3 +561,222 @@ def test_delete_batch_when_none_returns_404(materials_client):
     client, _ = materials_client
     deleted = client.delete("/api/materials/batch")
     assert deleted.status_code == 404
+
+
+def test_prefetch_status_returns_zeros_without_batch(materials_client):
+    client, _ = materials_client
+    response = client.get("/api/materials/prefetch/status")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ready_count"] == 0
+    assert data["running_count"] == 0
+
+
+def test_prefetch_status_after_upload(materials_client):
+    client, _ = materials_client
+    assert upload_zip(
+        client,
+        {"a.jpg": image_bytes(), "b.jpg": image_bytes(), "c.jpg": image_bytes()},
+    ).status_code == 200
+    response = client.get("/api/materials/prefetch/status")
+    assert response.status_code == 200
+    data = response.json()
+    assert "ready_count" in data
+    assert "running_count" in data
+    assert "target" in data
+
+
+def test_consume_prefetch_result_in_next_extract(materials_client, monkeypatch):
+    """预加载结果应被 next-extract 消费，避免重复调用模型。"""
+    client, TestSession = materials_client
+
+    call_count = {"n": 0}
+
+    async def fake_recognize_image(*args, **kwargs):
+        call_count["n"] += 1
+        return {
+            "中名": f"测试{call_count['n']}",
+            "产地3": "",
+            "图像": f"IMG-{call_count['n']}",
+            "采集人": "",
+            "采集日期": "",
+            "confidence": {},
+            "evidence": {},
+            "warnings": [],
+        }
+
+    async def _fake_complete_taxonomy(*args, **kwargs):
+        return {
+            "phylum": "", "纲": "", "Class": "", "Order": "",
+            "中文科名": "", "科名": "", "属名": "", "种名": "",
+        }
+
+    async def fake_extract_with_precomputed(
+        db,
+        image_path,
+        image_filename,
+        rotation_degrees=0,
+        record=None,
+        precomputed_result=None,
+    ):
+        if precomputed_result is None:
+            client_obj = type("FakeClient", (), {"recognize_image": fake_recognize_image})()
+            result = await client_obj.recognize_image()
+        else:
+            result = precomputed_result
+        record.status = STATUS_AWAITING_CONFIRMATION
+        record.extracted_draft_json = json.dumps(
+            {
+                "extracted": {
+                    "中名": result.get("中名", ""),
+                    "产地3": result.get("产地3", ""),
+                    "图像": result.get("图像", ""),
+                    "采集人": result.get("采集人", ""),
+                    "采集日期": result.get("采集日期", ""),
+                },
+                "confidence": {},
+                "evidence": {},
+                "warnings": [],
+            },
+            ensure_ascii=False,
+        )
+        db.commit()
+        db.refresh(record)
+        return record
+
+    monkeypatch.setattr(
+        materials_service.recognition_service,
+        "extract_image_info",
+        fake_extract_with_precomputed,
+    )
+    monkeypatch.setattr(
+        materials_service.recognition_service,
+        "_get_model_client",
+        lambda db: type("FC", (), {
+            "recognize_image": fake_recognize_image,
+            "complete_taxonomy": _fake_complete_taxonomy,
+        })(),
+    )
+    monkeypatch.setattr(
+        materials_service.recognition_service,
+        "_load_prompt",
+        lambda db, attr, fn: "test prompt",
+    )
+
+    assert upload_zip(
+        client,
+        {"a.jpg": image_bytes(), "b.jpg": image_bytes(), "c.jpg": image_bytes()},
+    ).status_code == 200
+
+    # 手动插入预加载结果（针对第二张素材）
+    from app.models import MaterialPrefetchResult, PREFETCH_STATUS_READY
+    db = TestSession()
+    batch = db.query(MaterialBatch).one()
+    items = db.query(MaterialItem).order_by(MaterialItem.sequence).all()
+    second_item_id = items[1].id
+    db.add(MaterialPrefetchResult(
+        batch_id=batch.id,
+        item_id=second_item_id,
+        status=PREFETCH_STATUS_READY,
+        result_json=json.dumps({
+            "中名": "预加载结果",
+            "产地3": "",
+            "图像": "PREFETCH-1",
+            "采集人": "",
+            "采集日期": "",
+            "confidence": {},
+            "evidence": {},
+            "warnings": [],
+        }),
+        config_fingerprint="any",
+    ))
+    db.commit()
+    db.close()
+
+    # 第一次 next-extract 领取第一张（无预加载）
+    r1 = client.post("/api/materials/next-extract").json()
+    assert r1["status"] == STATUS_AWAITING_CONFIRMATION
+
+    # 确认第一张
+    resp = client.post(
+        f"/api/recognition/{r1['record_id']}/confirm-extraction",
+        json={"confirmed": r1["extracted"], "duplicate_action": "skip"},
+    )
+    assert resp.status_code == 200
+
+    # 第二次 next-extract 应消费预加载结果
+    r2 = client.post("/api/materials/next-extract").json()
+    assert r2["status"] == STATUS_AWAITING_CONFIRMATION
+    assert r2["extracted"]["中名"] == "预加载结果"
+
+    # 预加载结果应已被删除
+    db = TestSession()
+    remaining_pf = db.query(MaterialPrefetchResult).filter(
+        MaterialPrefetchResult.item_id == second_item_id,
+    ).count()
+    assert remaining_pf == 0
+    db.close()
+
+
+def test_delete_batch_clears_prefetch_results(materials_client):
+    client, TestSession = materials_client
+    from app.models import MaterialPrefetchResult, PREFETCH_STATUS_READY
+    assert upload_zip(
+        client,
+        {"a.jpg": image_bytes(), "b.jpg": image_bytes()},
+    ).status_code == 200
+
+    db = TestSession()
+    batch = db.query(MaterialBatch).one()
+    items = db.query(MaterialItem).all()
+    for item in items:
+        db.add(MaterialPrefetchResult(
+            batch_id=batch.id,
+            item_id=item.id,
+            status=PREFETCH_STATUS_READY,
+            result_json="{}",
+            config_fingerprint="any",
+        ))
+    db.commit()
+    assert db.query(MaterialPrefetchResult).count() == 2
+    db.close()
+
+    deleted = client.delete("/api/materials/batch")
+    assert deleted.status_code == 200
+
+    db = TestSession()
+    assert db.query(MaterialPrefetchResult).count() == 0
+    db.close()
+
+
+def test_skip_item_clears_prefetch_result(materials_client):
+    client, TestSession = materials_client
+    from app.models import MaterialPrefetchResult, PREFETCH_STATUS_READY
+    assert upload_zip(
+        client,
+        {"a.jpg": image_bytes(), "b.jpg": image_bytes()},
+    ).status_code == 200
+
+    db = TestSession()
+    batch = db.query(MaterialBatch).one()
+    items = db.query(MaterialItem).order_by(MaterialItem.sequence).all()
+    first_item_id = items[0].id
+    db.add(MaterialPrefetchResult(
+        batch_id=batch.id,
+        item_id=first_item_id,
+        status=PREFETCH_STATUS_READY,
+        result_json="{}",
+        config_fingerprint="any",
+    ))
+    db.commit()
+    db.close()
+
+    skipped = client.post(f"/api/materials/{first_item_id}/skip")
+    assert skipped.status_code == 200
+
+    db = TestSession()
+    assert db.query(MaterialPrefetchResult).filter(
+        MaterialPrefetchResult.item_id == first_item_id,
+    ).count() == 0
+    db.close()
+

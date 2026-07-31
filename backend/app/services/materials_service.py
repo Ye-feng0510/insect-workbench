@@ -28,10 +28,13 @@ from app.models import (
     MATERIAL_STATUS_PENDING,
     MATERIAL_STATUS_PROCESSING,
     MATERIAL_STATUS_SKIPPED,
+    PREFETCH_STATUS_FAILED,
+    PREFETCH_STATUS_READY,
     STATUS_DISCARDED,
     STATUS_EXTRACTION_FAILED,
     MaterialBatch,
     MaterialItem,
+    MaterialPrefetchResult,
     SpecimenRecord,
 )
 from app.services import recognition_service
@@ -389,6 +392,35 @@ async def start_next_item(
     item.error_message = ""
     db.commit()
 
+    # 尝试消费预加载缓存
+    pf = (
+        db.query(MaterialPrefetchResult)
+        .filter(
+            MaterialPrefetchResult.item_id == item.id,
+            MaterialPrefetchResult.status == PREFETCH_STATUS_READY,
+        )
+        .first()
+    )
+    if pf is not None and pf.result_json:
+        try:
+            precomputed = json.loads(pf.result_json)
+            db.delete(pf)
+            db.commit()
+            record = await recognition_service.extract_image_info(
+                db,
+                image_path,
+                item.original_filename,
+                rotation_degrees,
+                record=record,
+                precomputed_result=precomputed,
+            )
+            return item, record
+        except Exception:
+            # 缓存结果无效，删除并回退到正常识别
+            if pf in db:
+                db.delete(pf)
+                db.commit()
+
     try:
         record = await recognition_service.extract_image_info(
             db,
@@ -425,6 +457,11 @@ def skip_item(db: Session, item_id: int) -> dict[str, Any]:
             record.status = STATUS_DISCARDED
             if record.image_path:
                 Path(record.image_path).unlink(missing_ok=True)
+
+    # 清除该素材的预加载缓存
+    db.query(MaterialPrefetchResult).filter(
+        MaterialPrefetchResult.item_id == item_id,
+    ).delete(synchronize_session=False)
 
     item.status = MATERIAL_STATUS_SKIPPED
     item.error_message = ""
@@ -517,6 +554,11 @@ def delete_batch(db: Session) -> dict[str, Any]:
     extract_dir = batch.extract_dir
     zip_path = batch.stored_zip_path
 
+    # 清除该批次的所有预加载缓存
+    db.query(MaterialPrefetchResult).filter(
+        MaterialPrefetchResult.batch_id == batch.id,
+    ).delete(synchronize_session=False)
+
     db.query(MaterialItem).filter(MaterialItem.batch_id == batch.id).delete()
     db.delete(batch)
     db.commit()
@@ -527,3 +569,24 @@ def delete_batch(db: Session) -> dict[str, Any]:
         Path(zip_path).unlink(missing_ok=True)
 
     return get_summary(db)
+
+
+def get_prefetch_status(db: Session) -> dict[str, Any]:
+    """获取当前批次的预加载状态统计。"""
+    batch = get_active_batch(db)
+    if batch is None:
+        return {"ready_count": 0, "running_count": 0, "failed_count": 0, "target": settings.material_prefetch_size}
+
+    rows = (
+        db.query(MaterialPrefetchResult.status, func.count(MaterialPrefetchResult.id))
+        .filter(MaterialPrefetchResult.batch_id == batch.id)
+        .group_by(MaterialPrefetchResult.status)
+        .all()
+    )
+    counts = {status: count for status, count in rows}
+    return {
+        "ready_count": counts.get(PREFETCH_STATUS_READY, 0),
+        "running_count": counts.get("running", 0),
+        "failed_count": counts.get(PREFETCH_STATUS_FAILED, 0),
+        "target": settings.material_prefetch_size,
+    }

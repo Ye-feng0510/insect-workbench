@@ -11,8 +11,10 @@ import { getActiveDraft, discardDraft, imageUrl } from '@/services/draft'
 import {
   extractNextMaterial,
   getMaterialSummary,
+  getPrefetchStatus,
   skipMaterial,
 } from '@/services/materials'
+import type { MaterialPrefetchStatus } from '@/types'
 import { extractErrorMessage } from '@/types'
 import {
   STATUS, ACTIVE_DRAFT_STATUSES, STATUS_LABELS, STATUS_COLORS,
@@ -50,6 +52,7 @@ export default function WorkbenchPage() {
   const [materialSummary, setMaterialSummary] = useState<MaterialSummary | null>(null)
   const [queueLoading, setQueueLoading] = useState(false)
   const [skipping, setSkipping] = useState(false)
+  const [prefetchStatus, setPrefetchStatus] = useState<MaterialPrefetchStatus | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
   // 页面加载时恢复草稿
@@ -75,6 +78,15 @@ export default function WorkbenchPage() {
       // 静默忽略
     } finally {
       setLoading(false)
+    }
+    refreshPrefetchStatus()
+  }
+
+  const refreshPrefetchStatus = async () => {
+    try {
+      setPrefetchStatus(await getPrefetchStatus())
+    } catch {
+      setPrefetchStatus(null)
     }
   }
 
@@ -173,6 +185,7 @@ export default function WorkbenchPage() {
       setQueueLoading(false)
       setExtracting(false)
     }
+    refreshPrefetchStatus()
   }
 
   const handleReExtract = async () => {
@@ -323,6 +336,7 @@ export default function WorkbenchPage() {
     } finally {
       setSkipping(false)
     }
+    refreshPrefetchStatus()
   }
 
   const handleRotate = (dir: 'cw' | 'ccw') => {
@@ -384,6 +398,18 @@ export default function WorkbenchPage() {
                       <ListStart className="h-4 w-4" />
                       当前素材包还有 {materialSummary.pending_count} 张待处理
                     </div>
+                    {prefetchStatus && prefetchStatus.ready_count > 0 && (
+                      <div className="flex items-center gap-1 text-xs text-blue-600">
+                        <Loader2 className="h-3 w-3" />
+                        已预加载 {prefetchStatus.ready_count}/{prefetchStatus.target} 张
+                      </div>
+                    )}
+                    {prefetchStatus && prefetchStatus.running_count > 0 && prefetchStatus.ready_count === 0 && (
+                      <div className="flex items-center gap-1 text-xs text-blue-600">
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                        正在预加载...
+                      </div>
+                    )}
                     <button
                       onClick={startNextMaterial}
                       disabled={queueLoading}

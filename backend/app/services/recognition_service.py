@@ -96,6 +96,7 @@ async def extract_image_info(
     image_filename: str,
     rotation_degrees: int = 0,
     record: SpecimenRecord | None = None,
+    precomputed_result: dict[str, Any] | None = None,
 ) -> SpecimenRecord:
     """上传图片并提取5项图片原始信息。
 
@@ -105,6 +106,8 @@ async def extract_image_info(
     - 接收旋转角度并生成预处理图片
     - 调用视觉模型提取5项
     - 状态设为 awaiting_confirmation
+
+    当 precomputed_result 不为 None 时，跳过模型调用直接使用预加载结果。
     """
     if record is None:
         record = SpecimenRecord()
@@ -116,16 +119,19 @@ async def extract_image_info(
     db.commit()
     db.refresh(record)
 
-    client = _get_model_client(db)
-    prompt = _load_prompt(db, "recognition_prompt", "recognition_prompt.txt")
+    if precomputed_result is not None:
+        result = precomputed_result
+    else:
+        client = _get_model_client(db)
+        prompt = _load_prompt(db, "recognition_prompt", "recognition_prompt.txt")
 
-    try:
-        result = await client.recognize_image(image_path, prompt, rotation_degrees)
-    except ModelError as e:
-        record.status = STATUS_EXTRACTION_FAILED
-        record.warnings_json = json.dumps([str(e)], ensure_ascii=False)
-        db.commit()
-        raise HTTPException(status_code=502, detail=f"图片识别失败: {e}")
+        try:
+            result = await client.recognize_image(image_path, prompt, rotation_degrees)
+        except ModelError as e:
+            record.status = STATUS_EXTRACTION_FAILED
+            record.warnings_json = json.dumps([str(e)], ensure_ascii=False)
+            db.commit()
+            raise HTTPException(status_code=502, detail=f"图片识别失败: {e}")
 
     # 保存模型原始响应
     record.raw_model_response = json.dumps(result, ensure_ascii=False)

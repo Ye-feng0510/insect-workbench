@@ -286,3 +286,47 @@ class MaterialItem(Base):
         server_default=func.current_timestamp(),
         onupdate=func.current_timestamp(),
     )
+
+
+# ============================================================
+# 7. material_prefetch_results —— 后台预加载识别结果
+# ============================================================
+
+# 预加载任务状态
+PREFETCH_STATUS_RUNNING = "running"
+PREFETCH_STATUS_READY = "ready"
+PREFETCH_STATUS_FAILED = "failed"
+
+
+class MaterialPrefetchResult(Base):
+    """后台预加载的模型识别结果缓存。
+
+    每张素材图片最多一条记录(item_id 唯一)。
+    worker 串行填充窗口(默认3张),工作台消费后删除。
+    """
+
+    __tablename__ = "material_prefetch_results"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    batch_id: Mapped[int] = mapped_column(
+        ForeignKey("material_batches.id", ondelete="CASCADE"), index=True
+    )
+    item_id: Mapped[int] = mapped_column(
+        ForeignKey("material_items.id", ondelete="CASCADE"),
+        unique=True,
+        index=True,
+    )
+    status: Mapped[str] = mapped_column(
+        String(50), default=PREFETCH_STATUS_RUNNING, index=True
+    )
+    result_json: Mapped[str] = mapped_column(Text, default="")
+    config_fingerprint: Mapped[str] = mapped_column(String(200), default="")
+    error_message: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        server_default=func.current_timestamp(),
+        onupdate=func.current_timestamp(),
+    )

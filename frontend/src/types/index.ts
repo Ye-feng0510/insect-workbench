@@ -140,6 +140,13 @@ export interface MaterialSummary {
   failed_count: number
 }
 
+export interface MaterialPrefetchStatus {
+  ready_count: number
+  running_count: number
+  failed_count: number
+  target: number
+}
+
 export interface MaterialExtractResponse extends ExtractResponse {
   material_item_id: number
   batch_id: number
