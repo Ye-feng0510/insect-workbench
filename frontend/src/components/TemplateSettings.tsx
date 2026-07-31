@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { Upload, FileSpreadsheet, Loader2, Save, FlaskConical, CheckCircle, AlertCircle } from 'lucide-react'
 import { useToast } from '@/components/Toast'
 import {
@@ -25,7 +25,11 @@ const ALL_LETTERS = Array.from({ length: 52 }, (_, i) => {
   return s
 })
 
-export default function TemplateSettings() {
+interface TemplateSettingsProps {
+  onTemplateChange?: (template: TemplateInfo) => void
+}
+
+export default function TemplateSettings({ onTemplateChange }: TemplateSettingsProps) {
   const { show } = useToast()
   const [template, setTemplate] = useState<TemplateInfo | null>(null)
   const [sheets, setSheets] = useState<SheetInfo[]>([])
@@ -43,11 +47,7 @@ export default function TemplateSettings() {
   const [testing, setTesting] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
-  useEffect(() => {
-    loadTemplate()
-  }, [])
-
-  const loadTemplate = async () => {
+  const loadTemplate = useCallback(async () => {
     setLoading(true)
     try {
       const t = await getCurrentTemplate()
@@ -66,7 +66,11 @@ export default function TemplateSettings() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [show])
+
+  useEffect(() => {
+    void loadTemplate()
+  }, [loadTemplate])
 
   const handleUpload = async (file: File) => {
     if (!file.name.toLowerCase().endsWith('.xlsx')) {
@@ -77,6 +81,7 @@ export default function TemplateSettings() {
     try {
       const t = await uploadTemplate(file)
       setTemplate(t)
+      onTemplateChange?.(t)
       show(`已上传模板: ${t.original_filename}`, 'success')
       const s = await getSheets(t.id)
       setSheets(s)
@@ -126,6 +131,7 @@ export default function TemplateSettings() {
       }
       const t = await updateMapping(template.id, config)
       setTemplate(t)
+      onTemplateChange?.(t)
       show(`配置已保存,数据将从第 ${t.base_write_row} 行开始写入`, 'success')
     } catch (e) {
       show(extractErrorMessage(e, '保存失败'), 'error')

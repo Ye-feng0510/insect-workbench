@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
 import { Microscope, Images, Table, Download, Settings, CheckCircle, XCircle } from 'lucide-react'
 import { getModelConfig } from '@/services/settings'
@@ -8,7 +8,7 @@ const navItems = [
   { to: '/workbench', label: '识别工作台', icon: Microscope },
   { to: '/materials', label: '数据素材图片', icon: Images },
   { to: '/records', label: '记录管理', icon: Table },
-  { to: '/export', label: 'Excel 导出', icon: Download },
+  { to: '/export', label: '模板与导出', icon: Download },
   { to: '/settings', label: '设置', icon: Settings },
 ]
 
@@ -30,24 +30,29 @@ function StatusBadge({ ok, label }: StatusBadgeProps) {
   )
 }
 
+export interface LayoutOutletContext {
+  refreshTemplateStatus: () => Promise<void>
+}
+
 export default function Layout() {
   const [modelConfigured, setModelConfigured] = useState(false)
   const [templateConfigured, setTemplateConfigured] = useState(false)
 
-  useEffect(() => {
-    // 并行检查配置状态,失败时静默处理
-    Promise.allSettled([
-      getModelConfig(),
-      getCurrentTemplate(),
-    ]).then(([modelRes, tplRes]) => {
-      if (modelRes.status === 'fulfilled') {
-        setModelConfigured(!!modelRes.value.base_url && !!modelRes.value.model_name)
-      }
-      if (tplRes.status === 'fulfilled' && tplRes.value) {
-        setTemplateConfigured(tplRes.value.is_active)
-      }
-    })
+  const refreshTemplateStatus = useCallback(async () => {
+    try {
+      const template = await getCurrentTemplate()
+      setTemplateConfigured(Boolean(template?.is_active && template.target_sheet))
+    } catch {
+      setTemplateConfigured(false)
+    }
   }, [])
+
+  useEffect(() => {
+    getModelConfig()
+      .then((model) => setModelConfigured(Boolean(model.base_url && model.model_name)))
+      .catch(() => setModelConfigured(false))
+    void refreshTemplateStatus()
+  }, [refreshTemplateStatus])
 
   return (
     <div className="flex h-screen bg-gray-50 text-gray-800">
@@ -77,18 +82,26 @@ export default function Layout() {
         <div className="space-y-1.5 border-t border-gray-200 px-5 py-3 text-xs">
           <StatusBadge ok={templateConfigured} label="Excel 模板" />
           <StatusBadge ok={modelConfigured} label="模型 API" />
-          {!modelConfigured || !templateConfigured ? (
+          {!templateConfigured ? (
             <NavLink
-              to="/settings"
+              to="/export"
               className="mt-1 block text-xs text-blue-500 hover:underline"
             >
-              前往设置 &rarr;
+              配置 Excel 模板 &rarr;
+            </NavLink>
+          ) : null}
+          {!modelConfigured ? (
+            <NavLink
+              to="/settings"
+              className="block text-xs text-blue-500 hover:underline"
+            >
+              配置模型 API &rarr;
             </NavLink>
           ) : null}
         </div>
       </aside>
       <main className="flex-1 overflow-auto p-6">
-        <Outlet />
+        <Outlet context={{ refreshTemplateStatus } satisfies LayoutOutletContext} />
       </main>
     </div>
   )

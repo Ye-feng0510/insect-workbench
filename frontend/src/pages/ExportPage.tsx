@@ -1,30 +1,59 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { useOutletContext } from 'react-router-dom'
 import { Download, FileSpreadsheet, Loader2, CheckCircle, AlertCircle } from 'lucide-react'
 import { useToast } from '@/components/Toast'
-import Loading from '@/components/Loading'
+import TemplateSettings from '@/components/TemplateSettings'
+import type { LayoutOutletContext } from '@/components/Layout'
 import { getExportSummary, exportExcel } from '@/services/export'
-import { extractErrorMessage, type ExportSummary } from '@/types'
+import { extractErrorMessage, type ExportSummary, type TemplateInfo } from '@/types'
 
 export default function ExportPage() {
   const { show } = useToast()
+  const { refreshTemplateStatus } = useOutletContext<LayoutOutletContext>()
   const [summary, setSummary] = useState<ExportSummary | null>(null)
   const [loading, setLoading] = useState(true)
   const [exporting, setExporting] = useState(false)
   const [lastExport, setLastExport] = useState<{ url: string; count: number } | null>(null)
+  const summaryRequestRef = useRef(0)
 
-  useEffect(() => {
-    loadSummary()
-  }, [])
-
-  const loadSummary = async () => {
+  const loadSummary = useCallback(async () => {
+    const requestId = ++summaryRequestRef.current
     setLoading(true)
     try {
       const data = await getExportSummary()
-      setSummary(data)
+      if (requestId === summaryRequestRef.current) {
+        setSummary(data)
+      }
     } catch (e) {
-      show(extractErrorMessage(e, '加载汇总失败'), 'error')
+      if (requestId === summaryRequestRef.current) {
+        setSummary(null)
+        const message = extractErrorMessage(e, '加载汇总失败')
+        if (!message.includes('尚未配置 Excel 模板')) {
+          show(message, 'error')
+        }
+      }
     } finally {
+      if (requestId === summaryRequestRef.current) {
+        setLoading(false)
+      }
+    }
+  }, [show])
+
+  useEffect(() => {
+    void loadSummary()
+  }, [loadSummary])
+
+  const handleTemplateChange = async (template: TemplateInfo) => {
+    const configured = Boolean(template.is_active && template.target_sheet)
+    summaryRequestRef.current += 1
+    setLastExport(null)
+    if (!configured) {
+      setSummary(null)
       setLoading(false)
+    }
+    await refreshTemplateStatus()
+    if (configured) {
+      await loadSummary()
     }
   }
 
@@ -41,16 +70,25 @@ export default function ExportPage() {
     }
   }
 
-  if (loading) {
-    return <Loading />
-  }
-
   return (
-    <div className="mx-auto max-w-2xl space-y-6">
-      <h1 className="text-2xl font-bold text-gray-800">Excel 导出</h1>
+    <div className="mx-auto max-w-4xl space-y-6">
+      <h1 className="text-2xl font-bold text-gray-800">Excel 模板与导出</h1>
+
+      {/* 模板配置 */}
+      <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+        <h2 className="mb-1 text-lg font-semibold text-gray-700">Excel 模板配置</h2>
+        <p className="mb-4 text-sm text-gray-400">
+          上传 Excel 模板并配置字段映射。系统只写入 13 个目标字段，保留模板原有数据。
+        </p>
+        <TemplateSettings onTemplateChange={handleTemplateChange} />
+      </section>
 
       {/* 汇总信息 */}
-      {summary && (
+      {loading ? (
+        <div className="flex items-center justify-center rounded-xl border border-gray-200 bg-white py-8 shadow-sm">
+          <Loader2 className="h-6 w-6 animate-spin text-emerald-600" />
+        </div>
+      ) : summary ? (
         <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
           <h2 className="mb-4 text-lg font-semibold text-gray-700">导出汇总</h2>
           <div className="grid grid-cols-2 gap-4">
@@ -78,6 +116,10 @@ export default function ExportPage() {
               <span className="font-medium text-gray-700">第 {summary.start_write_row} 行</span>
             </div>
           </div>
+        </div>
+      ) : (
+        <div className="rounded-xl border border-gray-200 bg-white p-6 text-sm text-gray-500 shadow-sm">
+          保存 Excel 模板字段映射后，将在这里显示导出汇总。
         </div>
       )}
 
@@ -110,7 +152,11 @@ export default function ExportPage() {
           )}
         </button>
 
-        {!summary || summary.completed_count === 0 ? (
+        {!summary ? (
+          <p className="mt-2 text-center text-xs text-gray-400">
+            请先上传 Excel 模板并保存字段映射
+          </p>
+        ) : summary.completed_count === 0 ? (
           <p className="mt-2 text-center text-xs text-gray-400">
             没有已完成的记录,请先在识别工作台完成图片识别
           </p>

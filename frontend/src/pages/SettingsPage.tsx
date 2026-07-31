@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react'
 import { Save, Plug, RotateCcw, Loader2, RefreshCw, ChevronDown } from 'lucide-react'
 import { useToast } from '@/components/Toast'
 import Loading from '@/components/Loading'
-import TemplateSettings from '@/components/TemplateSettings'
 import {
   getModelConfig,
   updateModelConfig,
@@ -281,14 +280,6 @@ export default function SettingsPage() {
         </div>
       </section>
 
-      {/* C. Excel 模板设置 */}
-      <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-        <h2 className="mb-1 text-lg font-semibold text-gray-700">C. Excel 模板设置</h2>
-        <p className="mb-4 text-sm text-gray-400">
-          上传 Excel 模板,配置字段映射。系统只写入 13 个目标字段,保留模板原有数据。
-        </p>
-        <TemplateSettings />
-      </section>
     </div>
   )
 }

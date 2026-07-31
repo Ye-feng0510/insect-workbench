@@ -170,7 +170,7 @@ export default function ExcelPreview({ draftRow, highlightRow, autoScroll = true
         <EmptyState
           icon={<TableProperties className="h-10 w-10" />}
           title="尚未配置 Excel 模板"
-          description="请先在设置页面上传模板并配置字段映射"
+          description="请先在“模板与导出”页面上传模板并完成字段映射"
         />
       </div>
     )
