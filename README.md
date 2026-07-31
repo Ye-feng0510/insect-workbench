@@ -1,284 +1,264 @@
-# 昆虫标本图片识别与 Excel 录入工作台
+# 昆虫标本工作台
 
-> 本地单用户 Web 应用。上传昆虫标本图片,AI 视觉模型提取关键信息,用户确认后自动补全分类信息并写入 Excel 模板。
+一个面向昆虫标本数字化录入的多用户 Web 工作台。系统使用兼容 OpenAI API 的视觉模型识别标本图片，自动补全分类信息，并按照每位用户独立配置的 Excel 模板生成可下载文件。
 
----
+## 功能
 
-## 功能概览
-
-| 模块 | 说明 |
-|------|------|
-| 识别工作台 | 上传图片 → AI 提取 5 个字段(中名、图像编号、产地3、采集人、采集日期)→ 用户确认 → 自动补全 8 个分类字段 → 写入数据库 |
-| Excel 实时预览 | react-data-grid 虚拟滚动,13 字段 / 全部列切换,草稿行黄色高亮,完成行绿色高亮 |
-| 记录管理 | 搜索 / 筛选 / 编辑 / 删除 / 重新分类 |
-| Excel 导出 | 复制原模板,按行号写入已完成记录,采集日期 Excel 日期格式,图像编号文本格式 |
-| 设置 | 模型 API 配置 + 连接测试 / 识别 & 分类提示词 / Excel 模板上传 + 字段映射 |
-
-### 13 个目标字段
-
-**图片原始信息(5 个,AI 提取):** 中名、图像、产地3、采集人、采集日期
-
-**分类信息(8 个,AI 自动补全):** 纲、目、科、亚科、族、属、亚属、种本名
-
----
+- 图片识别：提取中名、图像编号、产地、采集人和采集日期。
+- 分类补全：自动生成纲、目、科、亚科、族、属、亚属和种本名。
+- 素材批处理：上传 ZIP，按顺序处理图片，并支持后台预加载和失败重试。
+- Excel 模板：每位用户拥有独立模板、字段映射、实时预览和导出文件。
+- 记录管理：搜索、筛选、编辑、重新分类和安全删除。
+- 多用户隔离：记录、素材、模板、图片、预览和导出均按所有者隔离。
+- 权限管理：管理员可创建、停用用户，切换数据所有者并调整工作流配额。
+- 安全登录：Argon2 密码哈希、服务端会话、HttpOnly Cookie、CSRF 防护和登录限流。
 
 ## 技术栈
 
-| 层 | 技术 |
-|----|------|
-| 后端 | Python 3.12+ / FastAPI 0.115.6 / SQLAlchemy 2.x / SQLite |
-| 前端 | React 19 / TypeScript / Vite / Tailwind CSS / react-data-grid |
-| AI | OpenAI 兼容多模态视觉模型(Base URL + API Key + 模型名) |
-| 测试 | pytest(后端)/ Vitest + Testing Library(前端) |
-
----
-
-## 环境要求
-
-- **Python**: 3.12 或更高
-- **Node.js**: 20 或更高
-- **pnpm**: 9 或更高(`npm install -g pnpm`)
-- **操作系统**: Windows / macOS / Linux
-
----
+| 层级 | 技术 |
+| --- | --- |
+| 后端 | Python 3.12+、FastAPI、SQLAlchemy、SQLite、openpyxl、Pillow |
+| 前端 | React 19、TypeScript、Vite、Tailwind CSS、react-data-grid |
+| AI | OpenAI Chat Completions 兼容的多模态视觉模型 |
+| 测试 | pytest、Vitest、Testing Library |
+| 部署 | Docker Compose，或本地 Python + Node.js |
 
 ## 快速开始
 
-### 1. 克隆仓库
+### 1. 克隆项目
 
 ```bash
 git clone https://github.com/Ye-feng0510/insect-workbench.git
 cd insect-workbench
 ```
 
-### 2. Docker 启动(推荐)
+### 2. 配置首次管理员
 
-只需安装 [Docker Desktop](https://www.docker.com/products/docker-desktop/),无需配置 Python / Node.js 环境:
+复制环境变量模板：
+
+```bash
+cp .env.example .env
+```
+
+Windows PowerShell：
+
+```powershell
+Copy-Item .env.example .env
+```
+
+编辑 `.env`，至少设置以下两项：
+
+```ini
+INSECT_BOOTSTRAP_ADMIN_USERNAME=admin
+INSECT_BOOTSTRAP_ADMIN_PASSWORD=请替换为至少12位的强密码
+```
+
+首次成功启动后会创建管理员。已有启用管理员时，后续启动不再依赖这两个变量。不要提交 `.env`、真实密码或模型 API Key。
+
+### 3. 使用 Docker 启动（推荐）
 
 ```bash
 docker compose up -d --build
 ```
 
-首次构建约 2-3 分钟(下载镜像 + 安装依赖 + 构建前端)。后续启动秒级完成。
-
-启动后访问: **http://127.0.0.1:8000**
+访问 <http://127.0.0.1:8000>。
 
 ```bash
 # 查看日志
 docker compose logs -f
 
-# 停止
+# 停止服务
 docker compose down
 
-# 重新构建(代码更新后)
+# 拉取代码后重新构建
 docker compose up -d --build
 ```
 
-> 数据持久化: 容器的 `data/` 目录映射到宿主机的 `./data/`,数据库、模板、图片、导出文件均保存在宿主机,容器删除后数据不丢失。
+`docker-compose.yml` 会把宿主机的 `./data` 挂载到容器，删除或重建容器不会删除业务数据。
 
-### 3. 脚本启动(无需 Docker)
+### 4. 使用本地脚本启动
 
-**Windows:**
+Docker 模式和本地模式默认都使用端口 `8000`，请勿同时运行。切换到本地模式前先执行：
+
+```bash
+docker compose down
+```
+
+Windows：
 
 ```cmd
 scripts\start.bat
 ```
 
-**Linux / macOS:**
+Linux 或 macOS：
 
 ```bash
 chmod +x scripts/start.sh
 ./scripts/start.sh
 ```
 
-脚本会自动完成:
-1. 前端依赖安装 + 构建
-2. 后端虚拟环境创建 + 依赖安装
-3. 启动服务
+Windows 脚本会检查 Docker 实例、端口占用、前端构建新鲜度和后端关键依赖。
 
-启动后访问: **http://127.0.0.1:8000**
+## 开发模式
 
-> 停止服务: 按 `Ctrl + C`
+### 后端
 
-### 4. 手动启动(开发模式)
+Windows PowerShell：
 
-如果需要前后端独立运行(热更新),可分别启动:
+```powershell
+python -m venv backend/venv
+backend\venv\Scripts\python.exe -m pip install -r backend\requirements.txt
+backend\venv\Scripts\python.exe -m uvicorn app.main:app --reload --app-dir backend
+```
 
-**后端:**
+Linux 或 macOS：
 
 ```bash
-cd backend
-python -m venv venv
-# Windows
-venv\Scripts\python.exe -m pip install -r requirements.txt
-venv\Scripts\python.exe -m uvicorn app.main:app --reload --app-dir backend
-# Linux/macOS
-source venv/bin/activate
-pip install -r requirements.txt
-uvicorn app.main:app --reload --app-dir backend
+python -m venv backend/venv
+backend/venv/bin/python -m pip install -r backend/requirements.txt
+backend/venv/bin/python -m uvicorn app.main:app --reload --app-dir backend
 ```
 
-后端运行在 http://127.0.0.1:8000
-
-**前端:**
+### 前端
 
 ```bash
-cd frontend
-pnpm install
-pnpm dev
+pnpm --dir frontend install --frozen-lockfile
+pnpm --dir frontend dev
 ```
 
-前端运行在 http://localhost:5173(自动代理 `/api` 到后端)
+前端开发服务器默认运行在 <http://127.0.0.1:5173>，并将 `/api` 代理到后端。
 
----
+## 首次使用
 
-## 使用流程
+1. 使用启动管理员登录。
+2. 在「设置」中填写模型 Base URL、API Key 和模型名称，并测试连接。
+3. 在「模板与导出」中上传当前用户的 Excel 模板并保存字段映射。
+4. 在「识别工作台」上传标本图片，核对识别结果后确认入表。
+5. 在「记录管理」中维护数据，或在「模板与导出」中生成 Excel。
+6. 管理员可在「用户管理」中创建普通用户并分配工作流配额。
 
-### 第一次使用
+## 用户、权限与配额
 
-1. **配置模型 API** → 打开「设置」页面,填写 Base URL、API Key、模型名称,点击「测试连接」确认可用
-2. **上传 Excel 模板** → 在设置页面上传你的 Excel 模板文件,系统自动检测字段映射,确认后保存
-3. **开始识别** → 打开「识别工作台」,上传标本图片
+| 角色 | 权限 |
+| --- | --- |
+| 普通用户 | 只能访问自己的记录、素材、模板、图片、预览和导出 |
+| 管理员 | 管理用户和配额，并通过明确的所有者上下文管理指定用户数据 |
 
-### 日常使用
+工作流在开始时预留配额，成功完成后核销，未完成或失败时释放。后台预加载本身不消耗配额。
 
-1. 在「识别工作台」上传图片
-2. AI 提取 5 个字段,显示在右侧表单中
-3. 核对并修改字段值(中名和图像编号为必填)
-4. 点击「确认信息并自动入表」
-5. 系统自动补全 8 个分类字段并写入数据库
-6. 底部 Excel 预览实时更新
-7. 需要导出时,打开「Excel 导出」页面,点击导出按钮下载文件
+## 环境变量
 
----
+完整配置见 [`.env.example`](.env.example)。
 
-## 配置说明
+| 变量 | 用途 | 默认值 |
+| --- | --- | --- |
+| `INSECT_BOOTSTRAP_ADMIN_USERNAME` | 首次启动管理员用户名 | 空 |
+| `INSECT_BOOTSTRAP_ADMIN_PASSWORD` | 首次启动管理员密码，至少 12 位 | 空 |
+| `AUTH_COOKIE_SECURE` | 仅通过 HTTPS 发送登录 Cookie | `false` |
+| `AUTH_SESSION_HOURS` | 登录会话有效时间 | `24` |
+| `DEFAULT_USER_QUOTA` | 新建普通用户的默认工作流配额 | `100` |
+| `MODEL_TIMEOUT_SECONDS` | 模型请求超时秒数 | `120` |
+| `MODEL_MAX_RETRIES` | 模型请求重试次数 | `2` |
+| `IMAGE_MAX_LONG_EDGE` | 图片压缩后的最长边 | `3000` |
+| `IMAGE_JPEG_QUALITY` | JPEG 输出质量 | `90` |
+| `CORS_ORIGINS` | 开发环境允许的前端来源 | 本地 Vite 地址 |
 
-### 环境变量
+模型连接信息通过管理员设置页面保存。请使用支持图片输入且兼容 OpenAI Chat Completions API 的模型服务。
 
-复制 `.env.example` 为 `.env`,按需修改:
+## 数据存储与迁移
 
-```ini
-# 后端服务(默认即可)
-BACKEND_HOST=127.0.0.1
-BACKEND_PORT=8000
+运行数据位于项目根目录的 `data/`：
 
-# 模型调用超时(秒)
-MODEL_TIMEOUT_SECONDS=120
-
-# 图片预处理
-IMAGE_MAX_LONG_EDGE=3000
-IMAGE_JPEG_QUALITY=90
-```
-
-### 模型 API
-
-需要 OpenAI 兼容的多模态视觉模型。支持的服务商:
-
-- 智谱 GLM-4V 系列(`glm-4v-plus` 等)
-- 阿里通义千问 VL 系列(`qwen-vl-plus` 等)
-- OpenAI GPT-4o
-- 其他兼容 OpenAI Chat Completions API 的服务
-
-Base URL 填写到 API 根路径,如 `https://open.bigmodel.cn/api/paas/v4`。
-
----
-
-## 数据存储
-
-所有数据存储在项目根目录的 `data/` 文件夹:
-
-```
+```text
 data/
-├── app.db              # SQLite 数据库(记录、设置、缓存)
-├── templates/          # 上传的 Excel 模板副本
-├── images/             # 原始上传图片
-├── processed_images/   # 预处理后的图片(旋转/压缩)
-└── exports/            # 导出的 Excel 文件
+├── app.db
+├── templates/
+├── images/
+├── processed_images/
+├── materials/
+└── exports/
 ```
 
-> `data/` 目录的内容不会提交到 Git。
+数据库启动时执行版本化迁移。旧数据库迁移前会创建 `app.db.backup-*` 备份。缺少首次管理员配置时，预检会在数据库备份和结构变更之前终止。
 
----
+请定期备份整个 `data/` 目录。不要只备份 SQLite 文件，因为模板、图片和导出文件也属于业务数据。
 
-## 运行测试
+## 测试与质量检查
 
-**后端:**
+后端：
+
+```powershell
+$env:PYTHONPATH="$PWD\backend"
+backend\venv\Scripts\python.exe -m pytest backend\tests -q
+backend\venv\Scripts\python.exe -m compileall -q backend\app backend\tests
+```
+
+前端：
 
 ```bash
-cd backend
-venv\Scripts\python.exe -m pytest tests/ -v    # Windows
-source venv/bin/activate && pytest tests/ -v    # Linux/macOS
+pnpm --dir frontend exec vitest run
+pnpm --dir frontend lint
+pnpm --dir frontend build
 ```
-
-**前端:**
-
-```bash
-cd frontend
-pnpm test
-```
-
-**类型检查:**
-
-```bash
-cd frontend
-pnpm exec tsc --noEmit
-```
-
----
 
 ## 项目结构
 
-```
-insect-specimen-workbench/
+```text
+insect-workbench/
 ├── backend/
 │   ├── app/
-│   │   ├── main.py              # FastAPI 入口
-│   │   ├── config.py            # 配置(环境变量)
-│   │   ├── database.py          # SQLite 引擎 + 初始化
-│   │   ├── models.py            # 4 张表定义
-│   │   ├── schemas.py           # Pydantic 模型
-│   │   ├── field_mapping.py     # 中英文字段映射
-│   │   ├── prompts/             # 默认提示词
-│   │   ├── routers/             # API 路由(6 个模块)
-│   │   └── services/            # 业务逻辑(5 个服务)
-│   ├── tests/                   # 后端测试
+│   │   ├── routers/        # API、认证和管理员路由
+│   │   ├── services/       # 识别、素材、模板、预览、导出和配额服务
+│   │   ├── auth.py         # 会话、CSRF、RBAC 和所有者上下文
+│   │   ├── migrations.py   # 数据库迁移与首次管理员
+│   │   ├── models.py       # SQLAlchemy 数据模型
+│   │   └── main.py         # FastAPI 入口和后台预加载生命周期
+│   ├── tests/
 │   └── requirements.txt
 ├── frontend/
 │   ├── src/
-│   │   ├── App.tsx              # 路由
-│   │   ├── main.tsx             # 入口
-│   │   ├── components/          # 通用组件
-│   │   ├── pages/               # 4 个页面
-│   │   ├── services/            # API 封装
-│   │   ├── types/               # TypeScript 类型
-│   │   └── lib/                 # 工具函数
-│   └── package.json
-├── scripts/                     # 启动脚本
-├── data/                        # 运行数据(gitignore)
+│   │   ├── components/
+│   │   ├── contexts/
+│   │   ├── pages/
+│   │   └── services/
+│   ├── package.json
+│   └── pnpm-lock.yaml
+├── scripts/
+├── data/                   # 本地运行数据，不提交到 Git
+├── docker-compose.yml
+├── Dockerfile
 └── .env.example
 ```
 
----
+## 部署说明
+
+当前生产模型是一个带持久数据卷的 Docker 容器。SQLite、本地模板、图片、ZIP、导出文件和常驻预加载线程都需要持久磁盘及长生命周期进程。
+
+不要把完整后端直接部署为无状态 Serverless Function。若将前端部署到 Vercel，后端仍应运行在支持 Docker、HTTPS、持久卷和长任务的主机上。
 
 ## 常见问题
 
-**Q: 启动后页面显示"尚未配置 Excel 模板"?**
+### 首次启动提示必须设置管理员
 
-A: 这是正常的。请先打开「设置」页面上传 Excel 模板并保存字段映射。
+确认项目根目录存在 `.env`，并设置：
 
-**Q: 图片识别失败?**
+```ini
+INSECT_BOOTSTRAP_ADMIN_USERNAME=admin
+INSECT_BOOTSTRAP_ADMIN_PASSWORD=至少12位强密码
+```
 
-A: 检查「设置」页面中的模型 API 配置是否正确,点击「测试连接」验证。确认 Base URL 格式正确(以 `/v1` 或 API 根路径结尾)。
+### 端口 8000 已被占用
 
-**Q: 导出的 Excel 打不开或被占用?**
+Docker 和本地脚本不能同时监听 `8000`。如果 Docker 已运行，可直接访问应用；若要本地启动，请先执行 `docker compose down`。
 
-A: 关闭正在打开该文件的 Excel 程序后重试。
+### 页面提示尚未配置 Excel 模板
 
-**Q: 支持哪些图片格式?**
+每位用户拥有独立模板。请切换到对应数据所有者，然后在「模板与导出」页面上传模板并保存字段映射。
 
-A: JPG、JPEG、PNG、WebP。系统会自动处理 EXIF 方向并压缩到长边 3000px。
+### 图片识别失败
 
-**Q: 数据库在哪?**
+在管理员「设置」页面检查模型 Base URL、API Key 和模型名称，并执行连接测试。
 
-A: `data/app.db`,SQLite 文件。删除该文件可重置所有数据(需重新配置模型和模板)。
+### 支持哪些图片格式
+
+支持 JPG、JPEG、PNG 和 WebP。系统会处理 EXIF 方向并按照环境变量配置压缩图片。
