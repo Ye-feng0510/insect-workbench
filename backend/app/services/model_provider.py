@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import io
 import json
@@ -184,7 +185,10 @@ class VisionModelClient:
         rotation_degrees: int = 0,
     ) -> dict[str, Any]:
         """调用视觉模型提取图片信息,返回解析后的 JSON 字典。"""
-        image_data_url = self.prepare_image_base64(image_path, rotation_degrees)
+        # PIL 预处理放入线程池，避免阻塞 FastAPI 事件循环
+        image_data_url = await asyncio.to_thread(
+            self.prepare_image_base64, image_path, rotation_degrees
+        )
 
         messages = [
             {"role": "system", "content": prompt},

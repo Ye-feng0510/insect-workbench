@@ -1,11 +1,13 @@
 """数据素材 ZIP、处理队列、跳过记录与导出服务。"""
 from __future__ import annotations
 
+import asyncio
 import json
 import shutil
 import struct
 import uuid
 import zipfile
+from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -29,7 +31,9 @@ from app.models import (
     MATERIAL_STATUS_PROCESSING,
     MATERIAL_STATUS_SKIPPED,
     PREFETCH_STATUS_FAILED,
+    PREFETCH_STATUS_QUEUED,
     PREFETCH_STATUS_READY,
+    PREFETCH_STATUS_RUNNING,
     STATUS_DISCARDED,
     STATUS_EXTRACTION_FAILED,
     MaterialBatch,
@@ -379,6 +383,123 @@ async def start_next_item(
     if item is None:
         raise HTTPException(status_code=404, detail="当前素材包没有待处理图片")
 
+    # 检查预加载缓存：优先消费 ready，等待 running，避免重复模型调用
+    pf = (
+        db.query(MaterialPrefetchResult)
+        .filter(MaterialPrefetchResult.item_id == item.id)
+        .first()
+    )
+
+    current_fp = None
+    try:
+        from app.services.prefetch_service import _get_current_fingerprint
+        current_fp = _get_current_fingerprint()
+    except Exception:
+        pass
+
+    # 如果有 ready 且指纹匹配，直接消费
+    if (
+        pf is not None
+        and pf.status == PREFETCH_STATUS_READY
+        and pf.result_json
+        and (current_fp is None or pf.config_fingerprint == current_fp)
+    ):
+        image_path = _copy_for_recognition(item)
+        record = SpecimenRecord(
+            image_filename=item.original_filename,
+            image_path=image_path,
+            rotation_degrees=rotation_degrees % 360,
+        )
+        db.add(record)
+        db.flush()
+        item.record_id = record.id
+        item.status = MATERIAL_STATUS_PROCESSING
+        item.error_message = ""
+        db.commit()
+
+        try:
+            precomputed = json.loads(pf.result_json)
+            db.delete(pf)
+            db.commit()
+            record = await recognition_service.extract_image_info(
+                db,
+                image_path,
+                item.original_filename,
+                rotation_degrees,
+                record=record,
+                precomputed_result=precomputed,
+            )
+            _notify_prefetch_worker()
+            return item, record
+        except Exception:
+            if pf in db:
+                db.delete(pf)
+                db.commit()
+            # 回退到正常识别（record 已创建）
+            try:
+                record = await recognition_service.extract_image_info(
+                    db,
+                    image_path,
+                    item.original_filename,
+                    rotation_degrees,
+                    record=record,
+                )
+                _notify_prefetch_worker()
+                return item, record
+            except Exception as exc:
+                _handle_extraction_failure(db, record, item, exc)
+                raise
+
+    # 如果正在预加载(running/queued)，等待它完成（最多120秒），避免重复调用模型
+    if pf is not None and pf.status in (PREFETCH_STATUS_RUNNING, PREFETCH_STATUS_QUEUED):
+        pf_id = pf.id
+        waited = 0
+        max_wait = settings.model_timeout_seconds
+        while waited < max_wait:
+            await asyncio.sleep(0.5)
+            waited += 0.5
+            db.expire_all()
+            pf_refresh = db.get(MaterialPrefetchResult, pf_id)
+            if pf_refresh is None:
+                break
+            if pf_refresh.status == PREFETCH_STATUS_READY and pf_refresh.result_json:
+                image_path = _copy_for_recognition(item)
+                record = SpecimenRecord(
+                    image_filename=item.original_filename,
+                    image_path=image_path,
+                    rotation_degrees=rotation_degrees % 360,
+                )
+                db.add(record)
+                db.flush()
+                item.record_id = record.id
+                item.status = MATERIAL_STATUS_PROCESSING
+                item.error_message = ""
+                db.commit()
+
+                try:
+                    precomputed = json.loads(pf_refresh.result_json)
+                    db.delete(pf_refresh)
+                    db.commit()
+                    record = await recognition_service.extract_image_info(
+                        db,
+                        image_path,
+                        item.original_filename,
+                        rotation_degrees,
+                        record=record,
+                        precomputed_result=precomputed,
+                    )
+                    _notify_prefetch_worker()
+                    return item, record
+                except Exception:
+                    if pf_refresh in db:
+                        db.delete(pf_refresh)
+                        db.commit()
+                    # 缓存无效，回退到正常识别
+                    break  # 继续到下面的正常识别流程
+            elif pf_refresh.status == PREFETCH_STATUS_FAILED:
+                break  # 预加载失败，回退到正常识别
+
+    # 正常同步识别（无缓存、缓存无效或预加载失败时）
     image_path = _copy_for_recognition(item)
     record = SpecimenRecord(
         image_filename=item.original_filename,
@@ -392,35 +513,6 @@ async def start_next_item(
     item.error_message = ""
     db.commit()
 
-    # 尝试消费预加载缓存
-    pf = (
-        db.query(MaterialPrefetchResult)
-        .filter(
-            MaterialPrefetchResult.item_id == item.id,
-            MaterialPrefetchResult.status == PREFETCH_STATUS_READY,
-        )
-        .first()
-    )
-    if pf is not None and pf.result_json:
-        try:
-            precomputed = json.loads(pf.result_json)
-            db.delete(pf)
-            db.commit()
-            record = await recognition_service.extract_image_info(
-                db,
-                image_path,
-                item.original_filename,
-                rotation_degrees,
-                record=record,
-                precomputed_result=precomputed,
-            )
-            return item, record
-        except Exception:
-            # 缓存结果无效，删除并回退到正常识别
-            if pf in db:
-                db.delete(pf)
-                db.commit()
-
     try:
         record = await recognition_service.extract_image_info(
             db,
@@ -429,16 +521,36 @@ async def start_next_item(
             rotation_degrees,
             record=record,
         )
+        _notify_prefetch_worker()
         return item, record
     except Exception as exc:
-        db.refresh(record)
-        if record.status in ACTIVE_DRAFT_STATUSES:
-            record.status = STATUS_EXTRACTION_FAILED
-        item.status = MATERIAL_STATUS_FAILED
-        item.error_message = str(getattr(exc, "detail", exc))
-        record.warnings_json = json.dumps([item.error_message], ensure_ascii=False)
-        db.commit()
+        _handle_extraction_failure(db, record, item, exc)
         raise
+
+
+def _handle_extraction_failure(
+    db: Session,
+    record: SpecimenRecord,
+    item: MaterialItem,
+    exc: Exception,
+) -> None:
+    """处理识别失败的通用逻辑。"""
+    db.refresh(record)
+    if record.status in ACTIVE_DRAFT_STATUSES:
+        record.status = STATUS_EXTRACTION_FAILED
+    item.status = MATERIAL_STATUS_FAILED
+    item.error_message = str(getattr(exc, "detail", exc))
+    record.warnings_json = json.dumps([item.error_message], ensure_ascii=False)
+    db.commit()
+
+
+def _notify_prefetch_worker() -> None:
+    """通知预加载 worker 补充窗口。"""
+    try:
+        from app.services.prefetch_service import notify_worker
+        notify_worker()
+    except Exception:
+        pass
 
 
 def skip_item(db: Session, item_id: int) -> dict[str, Any]:
@@ -466,6 +578,7 @@ def skip_item(db: Session, item_id: int) -> dict[str, Any]:
     item.status = MATERIAL_STATUS_SKIPPED
     item.error_message = ""
     db.commit()
+    _notify_prefetch_worker()
     return get_summary(db)
 
 
@@ -568,6 +681,7 @@ def delete_batch(db: Session) -> dict[str, Any]:
     if zip_path:
         Path(zip_path).unlink(missing_ok=True)
 
+    _notify_prefetch_worker()
     return get_summary(db)
 
 

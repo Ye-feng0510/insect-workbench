@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import {
   Upload, ZoomIn, ZoomOut, RotateCw, RotateCcw, Loader2,
   CheckCircle, AlertCircle, RefreshCw, Trash2, Lock, Image as ImageIcon,
@@ -55,10 +55,20 @@ export default function WorkbenchPage() {
   const [prefetchStatus, setPrefetchStatus] = useState<MaterialPrefetchStatus | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
-  // 页面加载时恢复草稿
+  // 定期轮询预加载状态
+  const refreshPrefetchStatusCb = useCallback(async () => {
+    try {
+      setPrefetchStatus(await getPrefetchStatus())
+    } catch {
+      setPrefetchStatus(null)
+    }
+  }, [])
+
   useEffect(() => {
     loadDraft()
-  }, [])
+    const interval = setInterval(refreshPrefetchStatusCb, 3000)
+    return () => clearInterval(interval)
+  }, [refreshPrefetchStatusCb])
 
   const loadDraft = async () => {
     setLoading(true)
@@ -83,11 +93,7 @@ export default function WorkbenchPage() {
   }
 
   const refreshPrefetchStatus = async () => {
-    try {
-      setPrefetchStatus(await getPrefetchStatus())
-    } catch {
-      setPrefetchStatus(null)
-    }
+    await refreshPrefetchStatusCb()
   }
 
   const parseDetailToDraft = (detail: RecordDetail): DraftData => {

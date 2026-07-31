@@ -62,4 +62,17 @@ def init_db() -> None:
                 "ON material_items (batch_id, status, sequence)"
             )
         )
+        # SQLite 不支持 ALTER TABLE ADD COLUMN IF NOT EXISTS,
+        # 但 create_all 会在新数据库中创建完整表。对已存在旧数据库,
+        # 用 try-except 幂等添加新列。
+        for col_def in [
+            ("material_prefetch_results", "attempt_count", "INTEGER DEFAULT 0"),
+            ("material_prefetch_results", "next_retry_at", "DATETIME"),
+        ]:
+            try:
+                conn.execute(
+                    text(f"ALTER TABLE {col_def[0]} ADD COLUMN {col_def[1]} {col_def[2]}")
+                )
+            except Exception:
+                pass  # 列已存在
         conn.commit()

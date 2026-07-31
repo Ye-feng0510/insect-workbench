@@ -293,6 +293,7 @@ class MaterialItem(Base):
 # ============================================================
 
 # 预加载任务状态
+PREFETCH_STATUS_QUEUED = "queued"
 PREFETCH_STATUS_RUNNING = "running"
 PREFETCH_STATUS_READY = "ready"
 PREFETCH_STATUS_FAILED = "failed"
@@ -302,7 +303,7 @@ class MaterialPrefetchResult(Base):
     """后台预加载的模型识别结果缓存。
 
     每张素材图片最多一条记录(item_id 唯一)。
-    worker 串行填充窗口(默认3张),工作台消费后删除。
+    worker 并行填充窗口(默认保持20张ready),工作台消费后删除。
     """
 
     __tablename__ = "material_prefetch_results"
@@ -317,11 +318,15 @@ class MaterialPrefetchResult(Base):
         index=True,
     )
     status: Mapped[str] = mapped_column(
-        String(50), default=PREFETCH_STATUS_RUNNING, index=True
+        String(50), default=PREFETCH_STATUS_QUEUED, index=True
     )
     result_json: Mapped[str] = mapped_column(Text, default="")
     config_fingerprint: Mapped[str] = mapped_column(String(200), default="")
     error_message: Mapped[str] = mapped_column(Text, default="")
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    next_retry_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True, default=None
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.current_timestamp()
     )

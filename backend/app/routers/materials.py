@@ -14,6 +14,7 @@ from app.models import (
     MATERIAL_STATUS_PENDING,
     MATERIAL_STATUS_PROCESSING,
     MATERIAL_STATUS_SKIPPED,
+    MaterialItem,
 )
 from app.schemas import (
     MaterialExtractResponse,
@@ -77,11 +78,15 @@ async def upload_materials(
                         detail=f"压缩包不能超过 {settings.material_zip_max_size_mb} MB",
                     )
                 output.write(chunk)
-        return materials_service.create_batch_from_zip_path(
+        result = materials_service.create_batch_from_zip_path(
             db,
             incoming_path,
             filename,
         )
+        # 通知预加载 worker 立即开始工作
+        from app.services.prefetch_service import notify_worker
+        notify_worker()
+        return result
     finally:
         await file.close()
         incoming_path.unlink(missing_ok=True)
@@ -120,6 +125,33 @@ async def delete_active_batch(db: Session = Depends(get_db)):
 async def prefetch_status(db: Session = Depends(get_db)):
     """获取当前批次的预加载状态。"""
     return materials_service.get_prefetch_status(db)
+
+
+@router.get("/next-preview")
+async def next_preview(db: Session = Depends(get_db)):
+    """预览下一张待处理素材（不创建草稿），用于前端先显示图片。"""
+    batch = materials_service.get_active_batch(db)
+    if batch is None:
+        raise HTTPException(status_code=404, detail="尚未上传数据素材压缩包")
+    active_draft = recognition_service.get_active_draft(db)
+    if active_draft is not None:
+        linked = materials_service.get_linked_item(db, active_draft.id)
+        if linked is not None:
+            return {"item_id": linked.id, "filename": linked.original_filename,
+                    "stored_path": linked.stored_path}
+    item = (
+        db.query(MaterialItem)
+        .filter(
+            MaterialItem.batch_id == batch.id,
+            MaterialItem.status == MATERIAL_STATUS_PENDING,
+        )
+        .order_by(MaterialItem.sequence.asc())
+        .first()
+    )
+    if item is None:
+        raise HTTPException(status_code=404, detail="当前素材包没有待处理图片")
+    return {"item_id": item.id, "filename": item.original_filename,
+            "stored_path": item.stored_path}
 
 
 @router.post("/prefetch/invalidate")

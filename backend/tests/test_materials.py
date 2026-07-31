@@ -662,6 +662,10 @@ def test_consume_prefetch_result_in_next_extract(materials_client, monkeypatch):
         "_load_prompt",
         lambda db, attr, fn: "test prompt",
     )
+    # 固定指纹，防止后台 worker 清理测试插入的预加载结果
+    from app.services import prefetch_service
+    test_fp = "test_fingerprint"
+    monkeypatch.setattr(prefetch_service, "_get_current_fingerprint", lambda: test_fp)
 
     assert upload_zip(
         client,
@@ -688,7 +692,7 @@ def test_consume_prefetch_result_in_next_extract(materials_client, monkeypatch):
             "evidence": {},
             "warnings": [],
         }),
-        config_fingerprint="any",
+        config_fingerprint=test_fp,
     ))
     db.commit()
     db.close()

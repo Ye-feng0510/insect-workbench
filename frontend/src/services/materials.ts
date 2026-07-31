@@ -59,4 +59,13 @@ export async function invalidatePrefetch(): Promise<void> {
   await api.post('/materials/prefetch/invalidate')
 }
 
+export async function getNextPreview(): Promise<{ item_id: number; filename: string; stored_path: string } | null> {
+  try {
+    const { data } = await api.get<{ item_id: number; filename: string; stored_path: string }>('/materials/next-preview')
+    return data
+  } catch {
+    return null
+  }
+}
+
 export const skippedMaterialsExportUrl = '/api/materials/skipped/export'
