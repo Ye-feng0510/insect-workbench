@@ -162,3 +162,63 @@ class TestPreview:
         for idx, row in enumerate(record_rows):
             expected_row = data["base_write_row"] + idx
             assert row["excel_row"] == expected_row
+
+    def test_record_edit_is_reflected_in_preview(self, client_with_template):
+        """编辑记录后实时预览使用数据库中的最新值。"""
+        preview = client_with_template.get("/api/excel/preview?mode=target").json()
+        record_row = next(row for row in preview["rows"] if row["status"] == "completed")
+
+        updated = client_with_template.patch(
+            f"/api/records/{record_row['record_id']}",
+            json={"fields": {"产地3": "深圳湾"}},
+        )
+        assert updated.status_code == 200
+        assert updated.json()["fields"]["产地3"] == "深圳湾"
+
+        refreshed = client_with_template.get("/api/excel/preview?mode=target").json()
+        refreshed_row = next(
+            row for row in refreshed["rows"]
+            if row["record_id"] == record_row["record_id"]
+        )
+        assert refreshed_row["values"]["产地3"] == "深圳湾"
+
+    def test_completed_record_rejects_invalid_inline_edits(self, client_with_template):
+        """实时编辑沿用完成记录的必填、日期和字段白名单校验。"""
+        preview = client_with_template.get("/api/excel/preview?mode=target").json()
+        record_id = next(
+            row["record_id"] for row in preview["rows"]
+            if row["status"] == "completed"
+        )
+
+        empty_name = client_with_template.patch(
+            f"/api/records/{record_id}",
+            json={"fields": {"中名": ""}},
+        )
+        assert empty_name.status_code == 422
+        assert "中名不能为空" in empty_name.json()["detail"]
+
+        invalid_date = client_with_template.patch(
+            f"/api/records/{record_id}",
+            json={"fields": {"采集日期": "2026/08/04"}},
+        )
+        assert invalid_date.status_code == 422
+        assert "YYYY-MM-DD" in invalid_date.json()["detail"]
+
+        unknown_field = client_with_template.patch(
+            f"/api/records/{record_id}",
+            json={"fields": {"未知字段": "值"}},
+        )
+        assert unknown_field.status_code == 422
+        assert "不支持修改字段" in unknown_field.json()["detail"]
+
+    def test_completed_record_rejects_duplicate_image_number(self, client_with_template):
+        """实时编辑不能绕过所有者范围内的图像编号唯一性。"""
+        preview = client_with_template.get("/api/excel/preview?mode=target").json()
+        record_rows = [row for row in preview["rows"] if row["status"] == "completed"]
+
+        response = client_with_template.patch(
+            f"/api/records/{record_rows[1]['record_id']}",
+            json={"fields": {"图像": record_rows[0]["values"]["图像"]}},
+        )
+        assert response.status_code == 409
+        assert "图像编号已存在" in response.json()["detail"]

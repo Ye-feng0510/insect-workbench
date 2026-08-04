@@ -1,12 +1,35 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
-import { DataGrid, type Column } from 'react-data-grid'
+import { DataGrid, type Column, type RenderEditCellProps } from 'react-data-grid'
 import { Loader2, Columns3, List, RefreshCw, TableProperties } from 'lucide-react'
 import { useToast } from '@/components/Toast'
 import EmptyState from '@/components/EmptyState'
 import { getPreview } from '@/services/preview'
+import { updateRecord } from '@/services/records'
 import { getCurrentTemplate } from '@/services/templates'
 import { extractErrorMessage } from '@/types'
 import type { PreviewResponse } from '@/types'
+
+const EDITABLE_FIELDS = new Set([
+  '中名', 'Phylum', '纲', 'Class', 'Order', '中文科名', '科名',
+  '属名', '种名', '产地3', '图像', '采集人', '采集日期',
+])
+
+function TextEditor({
+  row,
+  column,
+  onRowChange,
+  inputType = 'text',
+}: RenderEditCellProps<Row> & { inputType?: 'text' | 'date' }) {
+  return (
+    <input
+      autoFocus
+      type={inputType}
+      value={String(row[column.key] ?? '')}
+      onChange={(event) => onRowChange({ ...row, [column.key]: event.target.value })}
+      className="h-full w-full border-2 border-blue-500 bg-white px-1 text-xs outline-none"
+    />
+  )
+}
 
 interface ExcelPreviewProps {
   /** 外部传入的临时行数据(待确认草稿)。 */
@@ -23,6 +46,7 @@ export default function ExcelPreview({ draftRow, highlightRow, autoScroll = true
   const [loading, setLoading] = useState(true)
   const [mode, setMode] = useState<'target' | 'all'>('target')
   const [zoom, setZoom] = useState(100)
+  const [savingCells, setSavingCells] = useState<Set<string>>(new Set())
   const gridRef = useRef<HTMLDivElement>(null)
 
   const loadPreview = useCallback(async () => {
@@ -77,9 +101,21 @@ export default function ExcelPreview({ draftRow, highlightRow, autoScroll = true
 
     // 数据列
     const dataCols: Column<Row>[] = data.columns.map((col) => ({
-      key: col.field,
+      key: col.letter,
       name: col.field,
       width: 120,
+      editable: (row) => (
+        row.__status__ === 'completed'
+        && row.__record_id__ !== null
+        && EDITABLE_FIELDS.has(col.field)
+        && !savingCells.has(`${row.__record_id__}:${col.field}`)
+      ),
+      renderEditCell: (props) => (
+        <TextEditor
+          {...props}
+          inputType={col.field === '采集日期' ? 'date' : 'text'}
+        />
+      ),
       renderHeaderCell: () => (
         <div className="flex flex-col">
           <span className="text-xs font-bold text-gray-500">{col.letter}</span>
@@ -87,8 +123,10 @@ export default function ExcelPreview({ draftRow, highlightRow, autoScroll = true
         </div>
       ),
       renderCell: ({ row }) => {
-        const val = row[col.field] ?? ''
+        const val = row[col.letter] ?? ''
         const display = val === '' ? '' : String(val)
+        const saving = row.__record_id__ !== null
+          && savingCells.has(`${row.__record_id__}:${col.field}`)
         // 临时行黄色
         if (row.__status__ === 'draft') {
           return <span className="bg-yellow-50 px-1 text-xs text-gray-700">{display}</span>
@@ -101,12 +139,24 @@ export default function ExcelPreview({ draftRow, highlightRow, autoScroll = true
         if (row.__is_next__) {
           return <span className="border border-blue-300 px-1 text-xs text-gray-500">{display}</span>
         }
-        return <span className="px-1 text-xs text-gray-700">{display}</span>
+        return (
+          <span
+            className={`flex items-center gap-1 px-1 text-xs ${
+              row.__status__ === 'completed' && EDITABLE_FIELDS.has(col.field)
+                ? 'cursor-text text-gray-700 hover:bg-blue-50'
+                : 'text-gray-700'
+            }`}
+            title={row.__status__ === 'completed' && EDITABLE_FIELDS.has(col.field) ? '双击编辑' : undefined}
+          >
+            {display}
+            {saving && <Loader2 className="ml-auto h-3 w-3 animate-spin text-blue-500" />}
+          </span>
+        )
       },
     }))
 
     return [rowNumCol, ...dataCols]
-  }, [data])
+  }, [data, savingCells])
 
   // 构建行数据
   const rows: Row[] = useMemo(() => {
@@ -117,10 +167,13 @@ export default function ExcelPreview({ draftRow, highlightRow, autoScroll = true
     for (const r of data.rows) {
       const row: Row = {
         __excel_row__: r.excel_row,
+        __record_id__: r.record_id,
         __status__: r.status,
         __highlight__: highlightRow === r.excel_row,
         __is_next__: r.excel_row === data.next_write_row,
-        ...r.values,
+      }
+      for (const col of data.columns) {
+        row[col.letter] = r.values[col.field] ?? ''
       }
       result.push(row)
     }
@@ -129,6 +182,7 @@ export default function ExcelPreview({ draftRow, highlightRow, autoScroll = true
     if (draftRow && Object.keys(draftRow).length > 0) {
       const draftRowData: Row = {
         __excel_row__: data.next_write_row,
+        __record_id__: null,
         __status__: 'draft',
         __highlight__: false,
         __is_next__: false,
@@ -136,7 +190,7 @@ export default function ExcelPreview({ draftRow, highlightRow, autoScroll = true
       // 填入草稿字段值
       if (data.columns) {
         for (const col of data.columns) {
-          draftRowData[col.field] = draftRow[col.field] ?? ''
+          draftRowData[col.letter] = draftRow[col.field] ?? ''
         }
       }
       result.push(draftRowData)
@@ -144,6 +198,76 @@ export default function ExcelPreview({ draftRow, highlightRow, autoScroll = true
 
     return result
   }, [data, draftRow, highlightRow])
+
+  const handleRowsChange = useCallback((
+    nextRows: Row[],
+    change: { indexes: number[]; column: { key: string } },
+  ) => {
+    const rowIndex = change.indexes[0]
+    const previousRow = rows[rowIndex]
+    const nextRow = nextRows[rowIndex]
+    const column = data?.columns.find((item) => item.letter === change.column.key)
+    if (
+      !data
+      || !previousRow
+      || !nextRow
+      || !column
+      || !EDITABLE_FIELDS.has(column.field)
+      || previousRow.__status__ !== 'completed'
+      || previousRow.__record_id__ === null
+    ) {
+      return
+    }
+
+    const previousValue = String(previousRow[column.letter] ?? '')
+    const nextValue = String(nextRow[column.letter] ?? '')
+    if (previousValue === nextValue) return
+
+    const recordId = previousRow.__record_id__
+    const cellKey = `${recordId}:${column.field}`
+    setData((current) => current ? {
+      ...current,
+      rows: current.rows.map((row) => (
+        row.record_id === recordId
+          ? { ...row, values: { ...row.values, [column.field]: nextValue } }
+          : row
+      )),
+    } : current)
+    setSavingCells((current) => new Set(current).add(cellKey))
+
+    void updateRecord(recordId, { [column.field]: nextValue })
+      .then((updated) => {
+        const savedValue = updated.fields[column.field] ?? ''
+        setData((current) => current ? {
+          ...current,
+          rows: current.rows.map((row) => (
+            row.record_id === recordId
+              ? { ...row, values: { ...row.values, [column.field]: savedValue } }
+              : row
+          )),
+          last_updated: new Date().toISOString(),
+        } : current)
+        show(`已更新第 ${previousRow.__excel_row__} 行的“${column.field}”`, 'success')
+      })
+      .catch((error) => {
+        setData((current) => current ? {
+          ...current,
+          rows: current.rows.map((row) => (
+            row.record_id === recordId
+              ? { ...row, values: { ...row.values, [column.field]: previousValue } }
+              : row
+          )),
+        } : current)
+        show(extractErrorMessage(error, '保存单元格失败'), 'error')
+      })
+      .finally(() => {
+        setSavingCells((current) => {
+          const next = new Set(current)
+          next.delete(cellKey)
+          return next
+        })
+      })
+  }, [data, rows, show])
 
   // 自动滚动到高亮行
   useEffect(() => {
@@ -187,8 +311,9 @@ export default function ExcelPreview({ draftRow, highlightRow, autoScroll = true
       {/* 工具栏 */}
       <div className="flex items-center justify-between border-b border-gray-200 px-3 py-2">
         <div className="flex items-center gap-3">
-          <span className="text-sm font-medium text-gray-700">Excel 实时预览</span>
+          <span className="text-sm font-medium text-gray-700">Excel 实时预览与编辑</span>
           <span className="text-xs text-gray-400">{data.sheet_name}</span>
+          <span className="text-xs text-blue-500">双击已完成记录可编辑</span>
         </div>
         <div className="flex items-center gap-2">
           {/* 模式切换 */}
@@ -244,11 +369,11 @@ export default function ExcelPreview({ draftRow, highlightRow, autoScroll = true
         <DataGrid
           columns={columns}
           rows={rows}
+          onRowsChange={handleRowsChange}
           rowHeight={32}
           headerRowHeight={44}
           className="rdg-light"
           style={{ height: '100%' }}
-          onCellClick={() => {}} // 只读
         />
       </div>
 
@@ -265,8 +390,9 @@ export default function ExcelPreview({ draftRow, highlightRow, autoScroll = true
   )
 }
 
-interface Row extends Record<string, string | number | boolean | undefined> {
+interface Row extends Record<string, string | number | boolean | null | undefined> {
   __excel_row__: number
+  __record_id__: number | null
   __status__: string
   __highlight__: boolean
   __is_next__: boolean

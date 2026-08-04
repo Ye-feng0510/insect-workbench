@@ -172,6 +172,37 @@ def test_owner_isolation_and_admin_explicit_selection(auth_env):
     ).status_code == 422
 
 
+def test_record_edit_respects_user_and_admin_owner_context(auth_env):
+    """普通用户只能编辑自己记录,管理员可编辑明确选择的所有者记录。"""
+    alice = TestClient(app)
+    alice_csrf = _login(alice, "alice", "alice-password-123")
+    own_update = alice.patch(
+        "/api/records/1",
+        headers={"X-CSRF-Token": alice_csrf},
+        json={"fields": {"产地3": "Alice location"}},
+    )
+    assert own_update.status_code == 200
+    assert own_update.json()["fields"]["产地3"] == "Alice location"
+    assert alice.patch(
+        "/api/records/2",
+        headers={"X-CSRF-Token": alice_csrf},
+        json={"fields": {"产地3": "Forbidden"}},
+    ).status_code == 404
+
+    admin = TestClient(app)
+    admin_csrf = _login(admin, "admin", "admin-password-123")
+    managed_update = admin.patch(
+        "/api/records/2",
+        headers={
+            "X-CSRF-Token": admin_csrf,
+            "X-Owner-ID": "3",
+        },
+        json={"fields": {"产地3": "Admin managed location"}},
+    )
+    assert managed_update.status_code == 200
+    assert managed_update.json()["fields"]["产地3"] == "Admin managed location"
+
+
 def test_taxonomy_cache_is_owner_scoped(auth_env):
     _, TestSession = auth_env
     alice_taxonomy = {

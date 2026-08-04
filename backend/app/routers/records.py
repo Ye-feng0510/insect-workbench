@@ -8,9 +8,11 @@
   POST   /api/records/{id}/reclassify
 """
 import json
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -87,14 +89,54 @@ async def update_record(
         raise HTTPException(status_code=404, detail="记录不存在")
 
     if req.fields:
+        unknown_fields = sorted(set(req.fields) - set(FIELD_TO_COLUMN))
+        if unknown_fields:
+            raise HTTPException(
+                status_code=422,
+                detail=f"不支持修改字段: {', '.join(unknown_fields)}",
+            )
+
+        normalized_fields = {
+            field: str(value).strip()
+            for field, value in req.fields.items()
+        }
+        if record.status == STATUS_COMPLETED:
+            merged_fields = svc.record_to_fields(record)
+            merged_fields.update(normalized_fields)
+            if not merged_fields["中名"]:
+                raise HTTPException(status_code=422, detail="中名不能为空")
+            if not merged_fields["图像"]:
+                raise HTTPException(status_code=422, detail="图像编号不能为空")
+
+        new_date = normalized_fields.get("采集日期")
+        if new_date:
+            try:
+                datetime.strptime(new_date, "%Y-%m-%d")
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail="采集日期必须使用 YYYY-MM-DD 格式",
+                ) from exc
+
+        new_tuxiang = normalized_fields.get("图像")
+        if record.status == STATUS_COMPLETED and new_tuxiang:
+            duplicate = svc.check_duplicate_tuxiang(
+                db,
+                new_tuxiang,
+                record.owner_id,
+                exclude_id=record.id,
+            )
+            if duplicate is not None:
+                raise HTTPException(status_code=409, detail="图像编号已存在")
+
         old_zhongming = record.zhongming
-        for field, value in req.fields.items():
+        for field, value in normalized_fields.items():
             col = FIELD_TO_COLUMN.get(field)
             if col:
-                setattr(record, col, str(value).strip())
+                setattr(record, col, value)
 
         # 如果修改了分类字段且记录是 completed,校验后同步缓存
-        new_zhongming = req.fields.get("中名", old_zhongming).strip()
+        new_zhongming = normalized_fields.get("中名", old_zhongming)
         if record.status == STATUS_COMPLETED:
             taxonomy = {}
             for field in TAXONOMY_FIELDS:
@@ -112,7 +154,11 @@ async def update_record(
                 )
             # 校验不通过时不报错,只不更新缓存(用户可以在记录管理继续编辑)
 
-        db.commit()
+        try:
+            db.commit()
+        except IntegrityError as exc:
+            db.rollback()
+            raise HTTPException(status_code=409, detail="图像编号已存在") from exc
         db.refresh(record)
 
     return svc.record_to_detail(record)
