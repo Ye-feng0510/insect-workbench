@@ -1,5 +1,5 @@
 ﻿param(
-    [string]$Version = "v1.0.0",
+    [string]$Version = "v1.1.0",
     [string]$BuildPython = "",
     [string]$OutputDirectory = ""
 )
@@ -131,6 +131,17 @@ $batchContent = [IO.File]::ReadAllText($batchSource) -replace "`r?`n", "`r`n"
 Copy-Item -LiteralPath (
     Join-Path $PSScriptRoot "portable\便携版使用说明.txt"
 ) -Destination (Join-Path $packageRoot "便携版使用说明.txt")
+$release = [ordered]@{
+    product = "insect-specimen-workbench"
+    version = $Version
+    arch = "windows-x64"
+}
+$releaseJson = $release | ConvertTo-Json
+[IO.File]::WriteAllText(
+    (Join-Path $packageRoot "release.json"),
+    $releaseJson + "`n",
+    $utf8
+)
 
 Write-Host "[5/7] 验证隔离运行时..."
 $env:INSECT_PORTABLE_SCRIPT_TO_PARSE = $launcherDestination
