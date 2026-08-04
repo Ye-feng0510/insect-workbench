@@ -77,19 +77,22 @@ const preview = {
   mode: 'target',
   header_row: 1,
   base_write_row: 3,
-  columns: [{ letter: 'X', field: '产地3' }],
+  columns: [
+    { letter: 'X', field: '产地3' },
+    { letter: 'AM', field: '鉴定人' },
+  ],
   rows: [
     {
       excel_row: 2,
       record_id: null,
       status: 'template',
-      values: { 产地3: '模板内容' },
+      values: { 产地3: '模板内容', 鉴定人: '' },
     },
     {
       excel_row: 3,
       record_id: 7,
       status: 'completed',
-      values: { 产地3: '梧桐山' },
+      values: { 产地3: '梧桐山', 鉴定人: '王五' },
     },
   ],
   completed_count: 1,
@@ -109,7 +112,7 @@ describe('ExcelPreview inline editing', () => {
       start_row: 2,
       base_write_row: 3,
       style_source_row: 2,
-      field_mapping: { 产地3: 'X' },
+      field_mapping: { 产地3: 'X', 鉴定人: 'AM' },
       is_active: true,
       created_at: '',
     })
@@ -147,5 +150,21 @@ describe('ExcelPreview inline editing', () => {
       expect(updateRecord).toHaveBeenCalledWith(7, { 产地3: '深圳湾' })
     })
     expect(await screen.findByText('已更新第 3 行的“产地3”')).toBeInTheDocument()
+  })
+
+  it('allows completed identifier cells to be edited', async () => {
+    render(
+      <ToastProvider>
+        <ExcelPreview />
+      </ToastProvider>,
+    )
+
+    fireEvent.doubleClick(
+      await screen.findByRole('button', { name: 'edit-7-AM' }),
+    )
+
+    await waitFor(() => {
+      expect(updateRecord).toHaveBeenCalledWith(7, { 鉴定人: '深圳湾' })
+    })
   })
 })

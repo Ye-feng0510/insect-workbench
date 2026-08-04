@@ -57,8 +57,8 @@ class TestTableCreation:
         assert "material_batches" in tables
         assert "material_items" in tables
 
-    def test_specimen_records_has_13_fields(self, db_session):
-        """记录表包含全部 13 个目标字段列。"""
+    def test_specimen_records_has_14_fields(self, db_session):
+        """记录表包含全部 14 个目标字段列。"""
         record = SpecimenRecord(
             zhongming="二点红蝽",
             phylum="Arthropoda",
@@ -73,6 +73,7 @@ class TestTableCreation:
             tuxiang="PSZP-00842",
             caijiren="",
             caiji_riqi="2009-10-24",
+            jiandingren="王五",
             status=STATUS_COMPLETED,
         )
         db_session.add(record)
@@ -81,6 +82,7 @@ class TestTableCreation:
         assert loaded.zhongming == "二点红蝽"
         assert loaded.tuxiang == "PSZP-00842"
         assert loaded.caiji_riqi == "2009-10-24"
+        assert loaded.jiandingren == "王五"
 
     def test_material_batch_and_items(self, db_session):
         batch = MaterialBatch(

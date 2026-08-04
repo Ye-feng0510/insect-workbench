@@ -47,7 +47,8 @@ describe('columnLetterToIndex', () => {
 })
 
 describe('TARGET_FIELDS', () => {
-  it('正好 13 个字段', () => {
-    expect(TARGET_FIELDS).toHaveLength(13)
+  it('正好 14 个字段', () => {
+    expect(TARGET_FIELDS).toHaveLength(14)
+    expect(TARGET_FIELDS).toContain('鉴定人')
   })
 })

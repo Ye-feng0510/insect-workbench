@@ -6,7 +6,7 @@
 3. 读取 base_write_row
 4. 按 id 升序读取已完成记录
 5. 第 index 条记录(从0开始)的行号 = base_write_row + index
-6. 只写入 13 个目标字段
+6. 只写入已映射的目标字段
 7. 保留 base_write_row 之前的模板原有行、其他列和格式
 8. 从格式来源行复制样式
 9. 采集日期写为真正的 Excel 日期,yyyy-mm-dd 格式

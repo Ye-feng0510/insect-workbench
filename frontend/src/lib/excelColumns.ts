@@ -32,7 +32,7 @@ export function columnLetterToIndex(letter: string): number {
   return index - 1
 }
 
-/** 13 个目标字段(顺序与清单第4节一致)。 */
+/** 14 个目标字段。 */
 export const TARGET_FIELDS = [
   '中名',
   'Phylum',
@@ -47,6 +47,7 @@ export const TARGET_FIELDS = [
   '图像',
   '采集人',
   '采集日期',
+  '鉴定人',
 ] as const
 
 export type TargetField = (typeof TARGET_FIELDS)[number]
@@ -59,6 +60,9 @@ export const IMAGE_EXTRACTED_FIELDS = [
   '采集人',
   '采集日期',
 ] as const
+
+/** 用户手工录入的可选字段。 */
+export const MANUAL_OPTIONAL_FIELDS = ['鉴定人'] as const
 
 /** 根据中名补全的 8 个分类字段。 */
 export const TAXONOMY_FIELDS = [

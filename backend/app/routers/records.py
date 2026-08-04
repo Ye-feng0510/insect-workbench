@@ -100,6 +100,8 @@ async def update_record(
             field: str(value).strip()
             for field, value in req.fields.items()
         }
+        if len(normalized_fields.get("鉴定人", "")) > 200:
+            raise HTTPException(status_code=422, detail="鉴定人不能超过 200 个字符")
         if record.status == STATUS_COMPLETED:
             merged_fields = svc.record_to_fields(record)
             merged_fields.update(normalized_fields)

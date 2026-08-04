@@ -62,6 +62,9 @@ export const CONFIDENCE_COLORS: Record<string, string> = {
 /** 5 个图片提取字段。 */
 export const IMAGE_FIELDS = ['中名', '产地3', '图像', '采集人', '采集日期'] as const
 
+/** 用户手工录入的可选字段。 */
+export const MANUAL_OPTIONAL_FIELDS = ['鉴定人'] as const
+
 /** 8 个分类补全字段。 */
 export const TAXONOMY_FIELDS = [
   'Phylum', '纲', 'Class', 'Order', '中文科名', '科名', '属名', '种名',

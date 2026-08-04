@@ -96,11 +96,12 @@ class TestInspect:
         assert data["sheet_name"] == "实际要录入的表格"
         assert data["detected_header_row"] == 1
         mapping = data["field_mapping"]
-        # 13 个字段应该全部自动匹配
-        assert len(mapping) == 13
+        # 14 个字段应该全部自动匹配
+        assert len(mapping) == 14
         assert mapping["中名"] == "E"
         assert mapping["图像"] == "AE"
         assert mapping["采集日期"] == "AJ"
+        assert mapping["鉴定人"] == "AM"
         assert len(data["unmatched"]) == 0
 
 
@@ -193,4 +194,4 @@ class TestTestMapping:
         data = resp.json()
         assert data["sheet_name"] == "实际要录入的表格"
         assert data["base_write_row"] == 4
-        assert data["mapped_count"] == 13
+        assert data["mapped_count"] == 14

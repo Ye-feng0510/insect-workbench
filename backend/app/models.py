@@ -68,7 +68,7 @@ ACTIVE_DRAFT_STATUSES = frozenset(
     }
 )
 
-# 13 个目标字段列名(与 Excel 字段一一对应)
+# 14 个目标字段列名(与 Excel 字段一一对应)
 FIELD_ZHONGMING = "中名"  # 中名
 FIELD_PHYLUM = "Phylum"
 FIELD_GANG = "纲"  # 纲
@@ -82,6 +82,7 @@ FIELD_CHANDI3 = "产地3"
 FIELD_TUXIANG = "图像"  # 图像
 FIELD_CAIJIREN = "采集人"
 FIELD_CAIJI_RIQI = "采集日期"
+FIELD_JIANDINGREN = "鉴定人"
 
 
 # ============================================================
@@ -172,9 +173,10 @@ class SpecimenRecord(Base):
     extracted_draft_json: Mapped[str] = mapped_column(Text, default="")
     confirmed_extraction_json: Mapped[str] = mapped_column(Text, default="")
     taxonomy_result_json: Mapped[str] = mapped_column(Text, default="")
+    ocr_result_json: Mapped[str] = mapped_column(Text, default="")
     warnings_json: Mapped[str] = mapped_column(Text, default="[]")
 
-    # 13 个最终字段(扁平化,便于查询和排序)
+    # 14 个最终字段(扁平化,便于查询和排序)
     zhongming: Mapped[str] = mapped_column(String(200), default="", index=True)
     phylum: Mapped[str] = mapped_column(String(200), default="")
     gang: Mapped[str] = mapped_column(String(200), default="")
@@ -188,6 +190,7 @@ class SpecimenRecord(Base):
     tuxiang: Mapped[str] = mapped_column(String(200), default="", index=True)
     caijiren: Mapped[str] = mapped_column(String(200), default="")
     caiji_riqi: Mapped[str] = mapped_column(String(20), default="")
+    jiandingren: Mapped[str] = mapped_column(String(200), default="")
 
     # 时间戳
     created_at: Mapped[datetime] = mapped_column(

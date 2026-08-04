@@ -262,7 +262,9 @@ export default function TemplateSettings({ onTemplateChange }: TemplateSettingsP
           {/* 字段映射表 */}
           <div className="rounded-lg border border-gray-200">
             <div className="border-b border-gray-200 bg-gray-50 px-3 py-2">
-              <span className="text-xs font-medium text-gray-600">字段列映射 ({Object.keys(mapping).length}/13)</span>
+              <span className="text-xs font-medium text-gray-600">
+                字段列映射 ({Object.keys(mapping).length}/{TARGET_FIELDS.length})
+              </span>
             </div>
             <div className="max-h-64 overflow-y-auto">
               <table className="w-full text-sm">

@@ -8,10 +8,11 @@ import { updateRecord } from '@/services/records'
 import { getCurrentTemplate } from '@/services/templates'
 import { extractErrorMessage } from '@/types'
 import type { PreviewResponse } from '@/types'
+import { TARGET_FIELDS } from '@/lib/excelColumns'
 
 const EDITABLE_FIELDS = new Set([
   '中名', 'Phylum', '纲', 'Class', 'Order', '中文科名', '科名',
-  '属名', '种名', '产地3', '图像', '采集人', '采集日期',
+  '属名', '种名', '产地3', '图像', '采集人', '采集日期', '鉴定人',
 ])
 
 function TextEditor({
@@ -325,7 +326,7 @@ export default function ExcelPreview({ draftRow, highlightRow, autoScroll = true
               }`}
             >
               <List className="h-3 w-3" />
-              13字段
+              {TARGET_FIELDS.length}字段
             </button>
             <button
               onClick={() => setMode('all')}

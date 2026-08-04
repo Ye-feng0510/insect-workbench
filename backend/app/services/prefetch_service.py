@@ -45,7 +45,12 @@ def compute_config_fingerprint(
     rotation_degrees: int = 0,
 ) -> str:
     """计算配置指纹，用于检测模型/提示词变化后缓存失效。"""
-    raw = f"{base_url}|{model_name}|{recognition_prompt}|{rotation_degrees}"
+    raw = (
+        f"{base_url}|{model_name}|{recognition_prompt}|{rotation_degrees}|"
+        f"ocr={settings.ocr_enabled}|ocr_min={settings.ocr_min_confidence}|"
+        f"image_edge={settings.image_max_long_edge}|"
+        f"jpeg_quality={settings.image_jpeg_quality}|ocr-v1"
+    )
     return hashlib.md5(raw.encode("utf-8")).hexdigest()
 
 
@@ -58,7 +63,7 @@ def _get_current_fingerprint() -> str | None:
         s = _get_or_create_settings(db)
         if not s.base_url or not s.api_key or not s.model_name:
             return None
-        prompt = recognition_service._load_prompt(db, "recognition_prompt", "recognition_prompt.txt")
+        prompt = recognition_service._load_recognition_prompt(db)
         return compute_config_fingerprint(s.base_url, s.model_name, prompt)
     finally:
         db.close()
@@ -394,13 +399,13 @@ class PrefetchWorker:
             db2 = SessionLocal()
             try:
                 client = recognition_service._get_model_client(db2)
-                prompt = recognition_service._load_prompt(
-                    db2, "recognition_prompt", "recognition_prompt.txt"
-                )
+                prompt = recognition_service._load_recognition_prompt(db2)
             finally:
                 db2.close()
 
-            result = await client.recognize_image(str(source), prompt, 0)
+            result = await recognition_service.recognize_image_with_ocr(
+                client, str(source), prompt, 0
+            )
         except Exception as exc:
             self._mark_failed(pf_id, str(getattr(exc, "detail", exc)))
             return False

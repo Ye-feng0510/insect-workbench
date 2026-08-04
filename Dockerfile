@@ -26,6 +26,10 @@ FROM python:3.12-slim AS runtime
 #   /app/data/           数据目录(SQLite/图片/模板/导出)
 WORKDIR /app/backend
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 libxcb1 \
+    && rm -rf /var/lib/apt/lists/*
+
 # 先复制依赖文件,利用 Docker 缓存
 COPY backend/requirements.txt /app/backend/requirements.txt
 

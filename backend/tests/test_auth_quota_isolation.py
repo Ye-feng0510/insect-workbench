@@ -179,14 +179,15 @@ def test_record_edit_respects_user_and_admin_owner_context(auth_env):
     own_update = alice.patch(
         "/api/records/1",
         headers={"X-CSRF-Token": alice_csrf},
-        json={"fields": {"产地3": "Alice location"}},
+        json={"fields": {"产地3": "Alice location", "鉴定人": "Alice expert"}},
     )
     assert own_update.status_code == 200
     assert own_update.json()["fields"]["产地3"] == "Alice location"
+    assert own_update.json()["fields"]["鉴定人"] == "Alice expert"
     assert alice.patch(
         "/api/records/2",
         headers={"X-CSRF-Token": alice_csrf},
-        json={"fields": {"产地3": "Forbidden"}},
+        json={"fields": {"鉴定人": "Forbidden"}},
     ).status_code == 404
 
     admin = TestClient(app)
@@ -197,10 +198,11 @@ def test_record_edit_respects_user_and_admin_owner_context(auth_env):
             "X-CSRF-Token": admin_csrf,
             "X-Owner-ID": "3",
         },
-        json={"fields": {"产地3": "Admin managed location"}},
+        json={"fields": {"产地3": "Admin managed location", "鉴定人": "Admin expert"}},
     )
     assert managed_update.status_code == 200
     assert managed_update.json()["fields"]["产地3"] == "Admin managed location"
+    assert managed_update.json()["fields"]["鉴定人"] == "Admin expert"
 
 
 def test_taxonomy_cache_is_owner_scoped(auth_env):
@@ -443,7 +445,7 @@ def test_partial_auth_tables_resume_legacy_migration(tmp_path, monkeypatch):
             text("SELECT COUNT(*) FROM users WHERE username='bootstrap'")
         ).scalar_one()
     assert owner_id == admin_id
-    assert versions == [1, 2, 3]
+    assert versions == [1, 2, 3, 4]
     assert admin_count == 1
     assert len(list(tmp_path.glob("legacy.db.backup-*"))) == 1
 
@@ -476,13 +478,78 @@ def test_legacy_migration_assigns_bootstrap_admin(tmp_path, monkeypatch):
                 text("PRAGMA index_list('specimen_records')")
             )
         }
+        columns = {
+            row[1]
+            for row in conn.execute(
+                text("PRAGMA table_info('specimen_records')")
+            )
+        }
+        jiandingren = conn.execute(
+            text("SELECT jiandingren FROM specimen_records WHERE id=1")
+        ).scalar_one()
     assert owner == admin_id
-    assert versions == [1, 2, 3]
+    assert versions == [1, 2, 3, 4]
+    assert {"jiandingren", "ocr_result_json"}.issubset(columns)
+    assert jiandingren == ""
     assert "uq_specimen_owner_tuxiang_completed" in indexes
     backups = list(tmp_path.glob("legacy.db.backup-*"))
     assert len(backups) == 1
     migrate(engine)
     assert list(tmp_path.glob("legacy.db.backup-*")) == backups
+
+
+def test_v4_migration_backfills_existing_identifier_mapping(tmp_path):
+    import json
+    from openpyxl import Workbook
+
+    path = tmp_path / "v3.db"
+    workbook_path = tmp_path / "template.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "标本表"
+    sheet.append(["中名", "图像", "鉴定人"])
+    workbook.save(workbook_path)
+
+    engine = create_engine(f"sqlite:///{path}")
+    Base.metadata.create_all(engine)
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE schema_version ("
+            "version INTEGER PRIMARY KEY, applied_at DATETIME NOT NULL "
+            "DEFAULT CURRENT_TIMESTAMP)"
+        ))
+        conn.execute(text(
+            "INSERT INTO schema_version(version) VALUES (1), (2), (3)"
+        ))
+    with Session(engine) as db:
+        db.add(User(
+            id=1,
+            username="admin",
+            password_hash=hash_password("admin-password-123"),
+            role=ROLE_ADMIN,
+            is_active=True,
+        ))
+        db.add(ExcelTemplate(
+            owner_id=1,
+            original_filename="template.xlsx",
+            stored_path=str(workbook_path),
+            target_sheet="标本表",
+            header_row=1,
+            start_row=2,
+            base_write_row=2,
+            style_source_row=2,
+            field_mapping_json=json.dumps(
+                {"中名": "A", "图像": "B"}, ensure_ascii=False
+            ),
+            is_active=True,
+        ))
+        db.commit()
+
+    migrate(engine)
+
+    with Session(engine) as db:
+        mapping = json.loads(db.query(ExcelTemplate).one().field_mapping_json)
+    assert mapping == {"中名": "A", "图像": "B", "鉴定人": "C"}
 
 
 def test_exhausted_user_is_skipped_by_prefetch(auth_env, monkeypatch, tmp_path):

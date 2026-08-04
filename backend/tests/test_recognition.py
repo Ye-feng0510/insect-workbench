@@ -1,6 +1,9 @@
 """识别服务测试:分类校验逻辑(不依赖真实模型)。"""
+import asyncio
+
 import pytest
 
+from app.services import recognition_service
 from app.services.recognition_service import validate_taxonomy, validate_confirmed_fields
 from app.field_mapping import TAXONOMY_FIELDS
 
@@ -177,3 +180,63 @@ class TestConfirmedFieldsValidation:
             "采集人": "",
         })
         assert not any("采集人" in w for w in warnings)
+
+    def test_empty_jiandingren_ok(self):
+        warnings = validate_confirmed_fields({
+            "中名": "二点红蝽",
+            "图像": "PSZP-001",
+            "产地3": "龙岗园山景区",
+            "采集日期": "2009-10-24",
+            "鉴定人": "",
+        })
+        assert not any("鉴定人" in w for w in warnings)
+
+    def test_invalid_date_raises(self):
+        with pytest.raises(Exception) as exc_info:
+            validate_confirmed_fields({
+                "中名": "二点红蝽",
+                "图像": "PSZP-001",
+                "产地3": "龙岗园山景区",
+                "采集日期": "2009-02-30",
+            })
+        assert "YYYY-MM-DD" in str(exc_info.value.detail)
+
+    def test_jiandingren_length_is_limited(self):
+        with pytest.raises(Exception) as exc_info:
+            validate_confirmed_fields({
+                "中名": "二点红蝽",
+                "图像": "PSZP-001",
+                "产地3": "龙岗园山景区",
+                "采集日期": "2009-10-24",
+                "鉴定人": "甲" * 201,
+            })
+        assert "200" in str(exc_info.value.detail)
+
+
+def test_recognition_uses_filtered_ocr_evidence(monkeypatch):
+    ocr_result = {
+        "lines": [
+            {"text": "PSZP-001", "confidence": 0.99, "box": []},
+            {"text": "噪声", "confidence": 0.1, "box": []},
+        ],
+        "warnings": [],
+    }
+    monkeypatch.setattr(
+        recognition_service.ocr_service,
+        "recognize_text",
+        lambda *_args: ocr_result,
+    )
+
+    class Client:
+        async def recognize_image(self, *_args, **kwargs):
+            assert kwargs["ocr_result"]["lines"] == [ocr_result["lines"][0]]
+            return {"中名": "二点红蝽"}
+
+    result = asyncio.run(
+        recognition_service.recognize_image_with_ocr(
+            Client(), "unused.jpg", "prompt"
+        )
+    )
+
+    assert result["中名"] == "二点红蝽"
+    assert result["_ocr"]["lines"] == [ocr_result["lines"][0]]

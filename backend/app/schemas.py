@@ -152,7 +152,7 @@ class ConfirmExtractionRequest(BaseModel):
 
 
 class ConfirmExtractionResponse(BaseModel):
-    """确认入表响应:最终 13 个字段 + 实际 Excel 行号。"""
+    """确认入表响应:最终 14 个字段 + 实际 Excel 行号。"""
     record_id: int
     status: str
     fields: dict[str, str]
@@ -168,7 +168,7 @@ class DuplicateConflict(BaseModel):
 
 
 class RecordFields(BaseModel):
-    """13 个字段的字典表示。"""
+    """14 个字段的字典表示。"""
     fields: dict[str, str]
 
 
@@ -189,7 +189,7 @@ class RecordSummary(BaseModel):
 
 
 class RecordDetail(BaseModel):
-    """记录详情(含全部 13 字段 + JSON 草稿)。"""
+    """记录详情(含全部 14 字段 + JSON 草稿)。"""
     id: int
     image_filename: str
     image_path: str

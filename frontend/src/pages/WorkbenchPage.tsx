@@ -19,7 +19,7 @@ import { extractErrorMessage } from '@/types'
 import {
   STATUS, ACTIVE_DRAFT_STATUSES, STATUS_LABELS, STATUS_COLORS,
   CONFIDENCE_LABELS, CONFIDENCE_COLORS,
-  IMAGE_FIELDS,
+  IMAGE_FIELDS, MANUAL_OPTIONAL_FIELDS,
 } from '@/lib/status'
 import type { MaterialSummary, RecordDetail } from '@/types'
 import ExcelPreview from '@/components/ExcelPreview'
@@ -118,7 +118,10 @@ export default function WorkbenchPage() {
       imageFilename: detail.image_filename,
       imagePath: detail.image_path,
       rotation: detail.rotation_degrees,
-      extracted,
+      extracted: {
+        ...extracted,
+        鉴定人: detail.fields?.鉴定人 ?? '',
+      },
       confidence,
       warnings,
       materialItemId: detail.material_item_id,
@@ -214,7 +217,7 @@ export default function WorkbenchPage() {
       setDraft(prev => prev ? {
         ...prev,
         status: result.status,
-        extracted: result.extracted,
+        extracted: { ...prev.extracted, ...result.extracted },
         confidence: result.confidence,
         warnings: result.warnings,
       } : null)
@@ -656,6 +659,25 @@ export default function WorkbenchPage() {
                     </div>
                   )
                 })}
+
+                {MANUAL_OPTIONAL_FIELDS.map((field) => (
+                  <div key={field}>
+                    <label className="mb-1 block text-xs font-medium text-gray-600">
+                      {field}
+                      <span className="ml-1 font-normal text-gray-400">(选填)</span>
+                    </label>
+                    <input
+                      type="text"
+                      maxLength={200}
+                      value={draft.extracted[field] ?? ''}
+                      onChange={(e) => updateField(field, e.target.value)}
+                      disabled={draft.status !== STATUS.AWAITING_CONFIRMATION && draft.status !== STATUS.EXTRACTION_FAILED}
+                      className={`w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 ${
+                        draft.status !== STATUS.AWAITING_CONFIRMATION && draft.status !== STATUS.EXTRACTION_FAILED ? 'bg-gray-50' : ''
+                      }`}
+                    />
+                  </div>
+                ))}
 
                 {/* 警告显示 */}
                 {draft.warnings.length > 0 && (

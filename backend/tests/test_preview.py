@@ -47,7 +47,7 @@ def client_with_template():
     field_mapping = {
         "中名": "E", "Phylum": "G", "纲": "H", "Class": "I", "Order": "K",
         "中文科名": "L", "科名": "M", "属名": "N", "种名": "O", "产地3": "X",
-        "图像": "AE", "采集人": "AI", "采集日期": "AJ",
+        "图像": "AE", "采集人": "AI", "采集日期": "AJ", "鉴定人": "AM",
     }
     template = ExcelTemplate(
         original_filename="示例模板表.xlsx",
@@ -69,6 +69,7 @@ def client_with_template():
         order_field="Hemiptera", zhongwen_ke="红蝽科", ke="Pyrrhocoridae",
         shu="Dysdercus", zhong="cingulatus", chandi3="龙岗园山景区",
         tuxiang="PSZP-00842", caijiren="", caiji_riqi="2009-10-24",
+        jiandingren="王五",
         status=STATUS_COMPLETED,
     )
     r2 = SpecimenRecord(
@@ -76,6 +77,7 @@ def client_with_template():
         order_field="Orthoptera", zhongwen_ke="螽斯科", ke="Tettigoniidae",
         shu="Tettigonia", zhong="chinensis", chandi3="梧桐山",
         tuxiang="PSZP-00843", caijiren="张三", caiji_riqi="2010-05-15",
+        jiandingren="",
         status=STATUS_COMPLETED,
     )
     db.add_all([r1, r2])
@@ -101,11 +103,12 @@ class TestPreview:
         assert data["next_write_row"] == 6
         assert data["latest_write_row"] == 5
 
-        # 列应该是 13 个目标字段
-        assert len(data["columns"]) == 13
+        # 列应该是 14 个目标字段
+        assert len(data["columns"]) == 14
         col_fields = [c["field"] for c in data["columns"]]
         assert "中名" in col_fields
         assert "图像" in col_fields
+        assert "鉴定人" in col_fields
 
         # 模板行(header_row+1=2 到 base_write_row-1=3)
         template_rows = [r for r in data["rows"] if r["status"] == "template"]
@@ -118,6 +121,7 @@ class TestPreview:
         assert record_rows[0]["excel_row"] == 4
         assert record_rows[0]["values"]["中名"] == "二点红蝽"
         assert record_rows[0]["values"]["图像"] == "PSZP-00842"
+        assert record_rows[0]["values"]["鉴定人"] == "王五"
         # 第二条记录在 base_write_row+1=5
         assert record_rows[1]["excel_row"] == 5
         assert record_rows[1]["values"]["中名"] == "中华螽斯"
@@ -170,10 +174,11 @@ class TestPreview:
 
         updated = client_with_template.patch(
             f"/api/records/{record_row['record_id']}",
-            json={"fields": {"产地3": "深圳湾"}},
+            json={"fields": {"产地3": "深圳湾", "鉴定人": "赵六"}},
         )
         assert updated.status_code == 200
         assert updated.json()["fields"]["产地3"] == "深圳湾"
+        assert updated.json()["fields"]["鉴定人"] == "赵六"
 
         refreshed = client_with_template.get("/api/excel/preview?mode=target").json()
         refreshed_row = next(
@@ -181,6 +186,7 @@ class TestPreview:
             if row["record_id"] == record_row["record_id"]
         )
         assert refreshed_row["values"]["产地3"] == "深圳湾"
+        assert refreshed_row["values"]["鉴定人"] == "赵六"
 
     def test_completed_record_rejects_invalid_inline_edits(self, client_with_template):
         """实时编辑沿用完成记录的必填、日期和字段白名单校验。"""

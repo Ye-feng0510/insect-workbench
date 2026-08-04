@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     image_max_long_edge: int = 3000
     image_jpeg_quality: int = 90
 
+    # 本地 OCR。失败时自动回退到纯视觉模型识别。
+    ocr_enabled: bool = True
+    ocr_min_confidence: float = 0.45
+
     # 数据素材 ZIP 安全限制
     material_zip_max_size_mb: int = 2048
     material_zip_max_uncompressed_mb: int = 4096

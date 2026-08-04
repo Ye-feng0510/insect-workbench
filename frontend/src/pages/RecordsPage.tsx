@@ -13,7 +13,13 @@ import {
 import { imageUrl } from '@/services/draft'
 import { extractErrorMessage } from '@/types'
 import type { RecordDetail } from '@/types'
-import { STATUS_LABELS, STATUS_COLORS, IMAGE_FIELDS, TAXONOMY_FIELDS } from '@/lib/status'
+import {
+  STATUS_LABELS,
+  STATUS_COLORS,
+  IMAGE_FIELDS,
+  MANUAL_OPTIONAL_FIELDS,
+  TAXONOMY_FIELDS,
+} from '@/lib/status'
 
 const STATUS_OPTIONS = [
   { value: '', label: '全部状态' },
@@ -266,6 +272,24 @@ export default function RecordsPage() {
                       <label className="mb-1 block text-xs text-gray-500">{field}</label>
                       <input
                         type={field === '采集日期' ? 'date' : 'text'}
+                        value={editFields[field] ?? ''}
+                        onChange={(e) => updateEditField(field, e.target.value)}
+                        className="w-full rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-emerald-500 focus:outline-none"
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <h4 className="mb-2 text-sm font-medium text-gray-600">手工补充信息</h4>
+                <div className="grid grid-cols-2 gap-3">
+                  {MANUAL_OPTIONAL_FIELDS.map(field => (
+                    <div key={field}>
+                      <label className="mb-1 block text-xs text-gray-500">{field}（选填）</label>
+                      <input
+                        type="text"
+                        maxLength={200}
                         value={editFields[field] ?? ''}
                         onChange={(e) => updateEditField(field, e.target.value)}
                         className="w-full rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-emerald-500 focus:outline-none"

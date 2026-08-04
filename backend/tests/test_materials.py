@@ -391,6 +391,7 @@ def test_duplicate_replace_keeps_material_link(materials_client, monkeypatch):
                     "图像": "DUPLICATE-1",
                     "采集人": "",
                     "采集日期": "",
+                    "鉴定人": "新鉴定人",
                 },
                 "confidence": {},
                 "evidence": {},
@@ -451,6 +452,7 @@ def test_duplicate_replace_keeps_material_link(materials_client, monkeypatch):
     item = db.get(MaterialItem, extracted["material_item_id"])
     assert item.status == MATERIAL_STATUS_COMPLETED
     assert item.record_id == existing_id
+    assert db.get(SpecimenRecord, existing_id).jiandingren == "新鉴定人"
     batch = db.get(MaterialBatch, item.batch_id)
     batch.total_count = 2
     db.add(

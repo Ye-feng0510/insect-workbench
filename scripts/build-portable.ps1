@@ -14,6 +14,7 @@ $packageName = "insect-workbench-portable-$Version-windows-x64"
 $packageRoot = Join-Path $stageRoot $packageName
 $pythonRoot = Join-Path $packageRoot "runtime\python"
 $sitePackages = Join-Path $pythonRoot "Lib\site-packages"
+$wheelCache = Join-Path $cacheRoot "wheels"
 $pythonArchive = Join-Path $cacheRoot "python-3.12.10-embed-amd64.zip"
 $pythonUrl = "https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip"
 $pythonSha256 = "4ACBED6DD1C744B0376E3B1CF57CE906F9DC9E95E68824584C8099A63025A3C3"
@@ -34,6 +35,7 @@ if (-not $BuildPython) {
 }
 
 New-Item -ItemType Directory -Path $cacheRoot -Force | Out-Null
+New-Item -ItemType Directory -Path $wheelCache -Force | Out-Null
 New-Item -ItemType Directory -Path $stageRoot -Force | Out-Null
 New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 
@@ -78,9 +80,22 @@ New-Item -ItemType Directory -Path $sitePackages -Force | Out-Null
 
 Write-Host "[3/7] 安装锁定的 Windows x64 依赖..."
 $lockFile = Join-Path $PSScriptRoot "portable\requirements-win64.lock.txt"
+$antlrWheel = Get-ChildItem -LiteralPath $wheelCache `
+    -Filter "antlr4_python3_runtime-4.9.3-py3-none-any.whl" `
+    -File -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $antlrWheel) {
+    & $BuildPython -m pip wheel `
+        --wheel-dir $wheelCache `
+        --no-deps `
+        "antlr4-python3-runtime==4.9.3"
+    if ($LASTEXITCODE -ne 0) {
+        throw "ANTLR 运行时构建失败。"
+    }
+}
 & $BuildPython -m pip install `
     --target $sitePackages `
     --only-binary=:all: `
+    --find-links $wheelCache `
     --platform win_amd64 `
     --python-version 3.12 `
     --implementation cp `
@@ -148,8 +163,11 @@ import sys
 import argon2
 import fastapi
 import openpyxl
+import numpy
+import onnxruntime
 import PIL
 import pydantic
+import rapidocr
 import sqlalchemy
 import uvicorn
 root = pathlib.Path(sys.executable).resolve().parents[2]

@@ -1,7 +1,7 @@
 """字段名映射:中文 Excel 字段名 <-> 英文 ORM 列名。
 
 数据库 ORM 列名使用英文(避免 Python 保留字和特殊字符),
-但 API 和 Excel 对外统一使用清单第 4 节定义的 13 个中文/拉丁文字段名。
+但 API 和 Excel 对外统一使用目标中文/拉丁文字段名。
 """
 
 # 中文/拉丁文字段名 -> ORM 列名
@@ -19,6 +19,7 @@ FIELD_TO_COLUMN: dict[str, str] = {
     "图像": "tuxiang",
     "采集人": "caijiren",
     "采集日期": "caiji_riqi",
+    "鉴定人": "jiandingren",
 }
 
 # ORM 列名 -> 中文/拉丁文字段名(反向映射)
@@ -45,5 +46,8 @@ TAXONOMY_FIELDS: list[str] = [
     "种名",
 ]
 
-# 全部 13 个字段(顺序与清单第 4 节一致)
+# 手工可选字段，不参与图片识别或分类补全
+MANUAL_OPTIONAL_FIELDS: list[str] = ["鉴定人"]
+
+# 全部目标字段
 ALL_TARGET_FIELDS: list[str] = list(FIELD_TO_COLUMN.keys())

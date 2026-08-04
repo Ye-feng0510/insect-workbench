@@ -126,7 +126,7 @@ def get_preview(
         if mode == "target":
             values = {col["field"]: fields.get(col["field"], "") for col in columns}
         else:
-            # 全部列模式:同样只填 13 个目标字段,其他列留空
+            # 全部列模式:同样只填目标字段,其他列留空
             values = {}
             for col in columns:
                 if col["field"] in fields:

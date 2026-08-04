@@ -7,6 +7,7 @@ import type { LayoutOutletContext } from '@/components/Layout'
 import { getExportSummary, exportExcel } from '@/services/export'
 import { extractErrorMessage, type ExportSummary, type TemplateInfo } from '@/types'
 import { downloadAuthenticatedAsset } from '@/services/assets'
+import { TARGET_FIELDS } from '@/lib/excelColumns'
 
 export default function ExportPage() {
   const { show } = useToast()
@@ -100,7 +101,7 @@ export default function ExportPage() {
       <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
         <h2 className="mb-1 text-lg font-semibold text-gray-700">Excel 模板配置</h2>
         <p className="mb-4 text-sm text-gray-400">
-          上传 Excel 模板并配置字段映射。系统只写入 13 个目标字段，保留模板原有数据。
+          上传 Excel 模板并配置字段映射。系统只写入 {TARGET_FIELDS.length} 个目标字段，保留模板原有数据。
         </p>
         <TemplateSettings onTemplateChange={handleTemplateChange} />
       </section>
@@ -154,7 +155,7 @@ export default function ExportPage() {
             <ul className="list-inside list-disc space-y-1">
               <li>只导出已完成的记录(待确认的草稿不导出)</li>
               <li>按记录 ID 升序写入,行号 = 开始写入行 + 序号</li>
-              <li>只修改 13 个目标字段,保留模板原有数据和其他列</li>
+              <li>只修改 {TARGET_FIELDS.length} 个目标字段,保留模板原有数据和其他列</li>
               <li>采集日期写为 Excel 日期格式 (yyyy-mm-dd)</li>
               <li>图像编号以文本格式写入,避免被自动转换</li>
               <li>原始模板不会被覆盖</li>

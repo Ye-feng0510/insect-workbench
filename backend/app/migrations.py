@@ -1,6 +1,7 @@
 """Small, explicit SQLite schema migration and bootstrap system."""
 from __future__ import annotations
 
+import json
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -13,9 +14,9 @@ from sqlalchemy.orm import Session
 from app.auth import hash_password
 from app.config import EXPORTS_DIR, settings
 from app.database import Base
-from app.models import ExportArtifact, ROLE_ADMIN, User
+from app.models import ExcelTemplate, ExportArtifact, ROLE_ADMIN, User
 
-LATEST_SCHEMA_VERSION = 3
+LATEST_SCHEMA_VERSION = 4
 
 
 def _validate_new_admin_credentials(username: str, password: str) -> None:
@@ -96,6 +97,59 @@ def _columns(conn, table: str) -> set[str]:
         row[1]
         for row in conn.execute(text(f"PRAGMA table_info('{table}')")).fetchall()
     }
+
+
+def _backfill_jiandingren_mappings(engine: Engine) -> None:
+    """为已有模板安全补全鉴定人列映射。"""
+    from openpyxl import load_workbook
+
+    from app.services.template_service import resolve_template_path
+
+    columns = set()
+    with engine.connect() as conn:
+        if "excel_templates" in inspect(engine).get_table_names():
+            columns = _columns(conn, "excel_templates")
+    required = {
+        "stored_path",
+        "target_sheet",
+        "header_row",
+        "field_mapping_json",
+    }
+    if not required.issubset(columns):
+        return
+
+    with Session(engine) as db:
+        templates = db.query(ExcelTemplate).all()
+        changed = False
+        for template in templates:
+            if not template.target_sheet or not template.header_row:
+                continue
+            try:
+                mapping = json.loads(template.field_mapping_json or "{}")
+                if "鉴定人" in mapping:
+                    continue
+                wb = load_workbook(resolve_template_path(template), read_only=True)
+                try:
+                    if template.target_sheet not in wb.sheetnames:
+                        continue
+                    ws = wb[template.target_sheet]
+                    matches = [
+                        cell.column_letter
+                        for cell in ws[template.header_row]
+                        if str(cell.value or "").strip() == "鉴定人"
+                    ]
+                finally:
+                    wb.close()
+                if len(matches) == 1:
+                    mapping["鉴定人"] = matches[0]
+                    template.field_mapping_json = json.dumps(
+                        mapping, ensure_ascii=False
+                    )
+                    changed = True
+            except Exception:
+                continue
+        if changed:
+            db.commit()
 
 
 def migrate(engine: Engine) -> None:
@@ -274,8 +328,32 @@ def migrate(engine: Engine) -> None:
             )
             conn.execute(text("INSERT INTO schema_version(version) VALUES (3)"))
 
+        if 4 not in applied:
+            if (
+                "specimen_records" in existing_tables
+                and "jiandingren" not in _columns(conn, "specimen_records")
+            ):
+                conn.execute(
+                    text(
+                        "ALTER TABLE specimen_records ADD COLUMN "
+                        "jiandingren VARCHAR(200) NOT NULL DEFAULT ''"
+                    )
+                )
+            if (
+                "specimen_records" in existing_tables
+                and "ocr_result_json" not in _columns(conn, "specimen_records")
+            ):
+                conn.execute(
+                    text(
+                        "ALTER TABLE specimen_records ADD COLUMN "
+                        "ocr_result_json TEXT NOT NULL DEFAULT ''"
+                    )
+                )
+            conn.execute(text("INSERT INTO schema_version(version) VALUES (4)"))
+
     # Creates only missing tables; ownership changes above never rely on create_all.
     Base.metadata.create_all(bind=engine)
+    _backfill_jiandingren_mappings(engine)
     with engine.begin() as conn:
         conn.execute(
             text(
