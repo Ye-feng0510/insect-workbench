@@ -2,6 +2,7 @@ import api from './api'
 import type {
   MaterialExtractResponse,
   MaterialItemInfo,
+  MaterialPreview,
   MaterialPrefetchStatus,
   MaterialStatus,
   MaterialSummary,
@@ -59,12 +60,16 @@ export async function invalidatePrefetch(): Promise<void> {
   await api.post('/materials/prefetch/invalidate')
 }
 
-export async function getNextPreview(): Promise<{ item_id: number; filename: string; stored_path: string } | null> {
+export async function getNextPreview(): Promise<MaterialPreview | null> {
   try {
-    const { data } = await api.get<{ item_id: number; filename: string; stored_path: string }>('/materials/next-preview')
+    const { data } = await api.get<MaterialPreview>('/materials/next-preview')
     return data
-  } catch {
-    return null
+  } catch (error) {
+    const status = (
+      error as { response?: { status?: number } }
+    ).response?.status
+    if (status === 404) return null
+    throw error
   }
 }
 

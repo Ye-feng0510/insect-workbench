@@ -102,6 +102,7 @@ export interface TemplateInfo {
 export interface ExtractResponse {
   record_id: number
   status: string
+  image_url: string
   extracted: Record<string, string>
   confidence: Record<string, string>
   evidence: Record<string, string>
@@ -138,6 +139,7 @@ export interface RecordDetail {
   id: number
   image_filename: string
   image_path: string
+  image_url: string
   processed_image_path: string
   rotation_degrees: number
   status: string
@@ -184,6 +186,17 @@ export interface MaterialSummary {
   completed_count: number
   skipped_count: number
   failed_count: number
+  quota_total: number | null
+  quota_charged: number
+  quota_reserved: number
+  quota_remaining: number | null
+  quota_exhausted: boolean
+}
+
+export interface MaterialPreview {
+  item_id: number
+  filename: string
+  image_url: string
 }
 
 export interface MaterialPrefetchStatus {

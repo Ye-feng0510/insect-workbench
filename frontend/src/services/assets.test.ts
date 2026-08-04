@@ -22,9 +22,18 @@ describe('authenticated asset allowlist', () => {
     )
   })
 
+  it('fetches stable record image URLs through the authenticated client', async () => {
+    await fetchAuthenticatedAsset('/api/recognition/501/image')
+    expect(api.get).toHaveBeenCalledWith(
+      '/recognition/501/image',
+      { responseType: 'blob' },
+    )
+  })
+
   it.each([
     'https://example.com/api/recognition/image/specimen.jpg',
     '/api/records',
+    '/api/recognition/not-a-record/image',
     '/api/materials/skipped/export-other',
   ])('rejects unapproved asset URL %s', async (url) => {
     await expect(fetchAuthenticatedAsset(url)).rejects.toThrow(

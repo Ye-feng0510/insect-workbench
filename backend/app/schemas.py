@@ -137,6 +137,7 @@ class ExtractResponse(BaseModel):
     """图片提取响应:5 个图片原始信息字段 + 置信度 + 警告。"""
     record_id: int
     status: str
+    image_url: str = ""
     extracted: dict[str, str]
     confidence: dict[str, str] = {}
     evidence: dict[str, str] = {}
@@ -193,6 +194,7 @@ class RecordDetail(BaseModel):
     id: int
     image_filename: str
     image_path: str
+    image_url: str = ""
     processed_image_path: str
     rotation_degrees: int
     status: str
@@ -250,6 +252,11 @@ class MaterialSummary(BaseModel):
     completed_count: int = 0
     skipped_count: int = 0
     failed_count: int = 0
+    quota_total: int | None = None
+    quota_charged: int = 0
+    quota_reserved: int = 0
+    quota_remaining: int | None = None
+    quota_exhausted: bool = False
 
 
 class MaterialExtractResponse(ExtractResponse):

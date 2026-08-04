@@ -10,7 +10,6 @@ import AuthenticatedImage from '@/components/AuthenticatedImage'
 import {
   listRecords, updateRecord, deleteRecord, reclassifyRecord,
 } from '@/services/records'
-import { imageUrl } from '@/services/draft'
 import { extractErrorMessage } from '@/types'
 import type { RecordDetail } from '@/types'
 import {
@@ -342,7 +341,7 @@ export default function RecordsPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setViewingImage(null)}>
           <div className="max-h-[90vh] max-w-[90vw] overflow-auto">
             <AuthenticatedImage
-              src={viewingImage.image_path ? imageUrl(viewingImage.image_path) : ''}
+              src={viewingImage.image_url}
               alt={`记录 ${viewingImage.id}`}
               className="max-h-[90vh] max-w-[90vw] object-contain"
               onClick={(e) => e.stopPropagation()}

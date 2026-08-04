@@ -6,6 +6,9 @@ const ALLOWED_ASSET_PATHS = [
   '/api/export/download/',
 ]
 const ALLOWED_EXACT_ASSET_PATHS = ['/api/materials/skipped/export']
+const ALLOWED_ASSET_PATTERNS = [
+  /^\/api\/recognition\/\d+\/image$/,
+]
 
 function apiRelativeUrl(url: string): string {
   const origin = window.location.origin
@@ -15,6 +18,7 @@ function apiRelativeUrl(url: string): string {
     || (
       !ALLOWED_ASSET_PATHS.some((prefix) => parsed.pathname.startsWith(prefix))
       && !ALLOWED_EXACT_ASSET_PATHS.includes(parsed.pathname)
+      && !ALLOWED_ASSET_PATTERNS.some((pattern) => pattern.test(parsed.pathname))
     )
   ) {
     throw new Error('不允许访问非本站或未授权的资源地址')

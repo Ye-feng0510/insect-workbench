@@ -7,14 +7,15 @@ import {
 import { useToast } from '@/components/Toast'
 import Loading from '@/components/Loading'
 import { extractImage, reExtract, confirmExtraction } from '@/services/recognition'
-import { getActiveDraft, discardDraft, imageUrl } from '@/services/draft'
+import { getActiveDraft, discardDraft } from '@/services/draft'
 import {
   extractNextMaterial,
   getMaterialSummary,
+  getNextPreview,
   getPrefetchStatus,
   skipMaterial,
 } from '@/services/materials'
-import type { MaterialPrefetchStatus } from '@/types'
+import type { MaterialPrefetchStatus, MaterialPreview } from '@/types'
 import { extractErrorMessage } from '@/types'
 import {
   STATUS, ACTIVE_DRAFT_STATUSES, STATUS_LABELS, STATUS_COLORS,
@@ -30,6 +31,7 @@ interface DraftData {
   status: string
   imageFilename: string
   imagePath: string
+  imageUrl: string
   rotation: number
   extracted: Record<string, string>
   confidence: Record<string, string>
@@ -50,7 +52,11 @@ export default function WorkbenchPage() {
   const [showDiscardDialog, setShowDiscardDialog] = useState(false)
   const [pendingFile, setPendingFile] = useState<File | null>(null)
   const [highlightRow, setHighlightRow] = useState<number | null>(null)
+  const [previewRevision, setPreviewRevision] = useState(0)
   const [materialSummary, setMaterialSummary] = useState<MaterialSummary | null>(null)
+  const [nextMaterialPreview, setNextMaterialPreview] = useState<MaterialPreview | null>(null)
+  const [imageError, setImageError] = useState('')
+  const [imageRetryKey, setImageRetryKey] = useState(0)
   const [queueLoading, setQueueLoading] = useState(false)
   const [skipping, setSkipping] = useState(false)
   const [prefetchStatus, setPrefetchStatus] = useState<MaterialPrefetchStatus | null>(null)
@@ -82,25 +88,64 @@ export default function WorkbenchPage() {
     return () => clearInterval(interval)
   }, [refreshPrefetchStatusCb])
 
+  useEffect(() => {
+    if (
+      draft
+      || !materialSummary?.batch
+      || materialSummary.pending_count === 0
+    ) {
+      setNextMaterialPreview(null)
+      return
+    }
+    let active = true
+    getNextPreview()
+      .then((preview) => {
+        if (active) {
+          setNextMaterialPreview(preview)
+          setImageError('')
+        }
+      })
+      .catch((error) => {
+        if (active) {
+          setNextMaterialPreview(null)
+          setImageError(extractErrorMessage(error, '加载素材图片失败'))
+        }
+      })
+    return () => {
+      active = false
+    }
+  }, [draft, materialSummary?.batch, materialSummary?.pending_count])
+
+  useEffect(() => {
+    if (!materialSummary?.quota_exhausted) return
+    const interval = setInterval(() => {
+      getMaterialSummary()
+        .then(setMaterialSummary)
+        .catch(() => undefined)
+    }, 5000)
+    return () => clearInterval(interval)
+  }, [materialSummary?.quota_exhausted])
+
   const loadDraft = async () => {
     setLoading(true)
-    try {
-      const [detail, summary] = await Promise.all([
-        getActiveDraft(),
-        getMaterialSummary().catch(() => null),
-      ])
-      setMaterialSummary(summary)
+    const [detailResult, summaryResult] = await Promise.allSettled([
+      getActiveDraft(),
+      getMaterialSummary(),
+    ])
+    if (summaryResult.status === 'fulfilled') {
+      setMaterialSummary(summaryResult.value)
+    }
+    if (detailResult.status === 'fulfilled') {
+      const detail = detailResult.value
       if (detail && ACTIVE_DRAFT_STATUSES.includes(detail.status as never)) {
         const draftData = parseDetailToDraft(detail)
         setDraft(draftData)
         setRotation(draftData.rotation)
+        setImageError('')
         show('已恢复未完成的草稿', 'info')
       }
-    } catch {
-      // 静默忽略
-    } finally {
-      setLoading(false)
     }
+    setLoading(false)
     refreshPrefetchStatus()
   }
 
@@ -117,6 +162,7 @@ export default function WorkbenchPage() {
       status: detail.status,
       imageFilename: detail.image_filename,
       imagePath: detail.image_path,
+      imageUrl: detail.image_url,
       rotation: detail.rotation_degrees,
       extracted: {
         ...extracted,
@@ -128,6 +174,10 @@ export default function WorkbenchPage() {
       materialBatchId: detail.material_batch_id,
     }
   }
+
+  const handleImageLoadError = useCallback((message: string) => {
+    setImageError(message)
+  }, [])
 
   // 上传图片
   const handleFileSelect = async (file: File) => {
@@ -150,16 +200,13 @@ export default function WorkbenchPage() {
         status: result.status,
         imageFilename: file.name,
         imagePath: '',
+        imageUrl: result.image_url,
         rotation: rot,
         extracted: result.extracted,
         confidence: result.confidence,
         warnings: result.warnings,
       })
-      // 需要获取 image_path,重新拉取草稿
-      const detail = await getActiveDraft()
-      if (detail) {
-        setDraft(prev => prev ? { ...prev, imagePath: detail.image_path } : prev)
-      }
+      setImageError('')
       show('图片信息提取完成,请核查确认', 'success')
     } catch (e) {
       show(extractErrorMessage(e, '图片识别失败'), 'error')
@@ -180,6 +227,7 @@ export default function WorkbenchPage() {
         status: result.status,
         imageFilename: result.original_filename,
         imagePath: '',
+        imageUrl: result.image_url,
         rotation: 0,
         extracted: result.extracted,
         confidence: result.confidence,
@@ -188,20 +236,23 @@ export default function WorkbenchPage() {
         materialBatchId: result.batch_id,
       })
       setOriginalFile(null)
+      setNextMaterialPreview(null)
+      setImageError('')
       setZoom(1)
       setRotation(0)
-      const [detail, summary] = await Promise.all([
-        getActiveDraft(),
-        getMaterialSummary(),
-      ])
-      if (detail) {
-        setDraft(parseDetailToDraft(detail))
-      }
-      setMaterialSummary(summary)
+      getMaterialSummary()
+        .then(setMaterialSummary)
+        .catch(() => undefined)
       show('素材图片识别完成,请核查确认', 'success')
     } catch (e) {
-      show(extractErrorMessage(e, '加载下一张素材失败'), 'error')
-      await loadDraft()
+      const status = (e as { response?: { status?: number } }).response?.status
+      if (status === 429) {
+        setMaterialSummary(await getMaterialSummary().catch(() => materialSummary))
+        show('工作流配额已用尽,当前素材和图片已保留', 'error')
+      } else {
+        show(extractErrorMessage(e, '加载下一张素材失败'), 'error')
+        await loadDraft()
+      }
     } finally {
       setQueueLoading(false)
       setExtracting(false)
@@ -217,6 +268,7 @@ export default function WorkbenchPage() {
       setDraft(prev => prev ? {
         ...prev,
         status: result.status,
+        imageUrl: result.image_url,
         extracted: { ...prev.extracted, ...result.extracted },
         confidence: result.confidence,
         warnings: result.warnings,
@@ -232,6 +284,7 @@ export default function WorkbenchPage() {
   const finishCompletedRecord = async (excelRow: number, message: string) => {
     show(message, 'success')
     setHighlightRow(excelRow)
+    setPreviewRevision((revision) => revision + 1)
     setDraft(prev => prev ? { ...prev, status: STATUS.COMPLETED } : null)
     if (!draft?.materialItemId) {
       setTimeout(() => clearWorkbench(), 2000)
@@ -315,6 +368,7 @@ export default function WorkbenchPage() {
   const clearWorkbench = () => {
     setDraft(null)
     setOriginalFile(null)
+    setImageError('')
     setZoom(1)
     setRotation(0)
     setHighlightRow(null)
@@ -378,6 +432,8 @@ export default function WorkbenchPage() {
   const zhongmingEmpty = !draft?.extracted['中名']?.trim()
   const tuxiangEmpty = !draft?.extracted['图像']?.trim()
   const canConfirm = draft?.status === STATUS.AWAITING_CONFIRMATION && !zhongmingEmpty && !tuxiangEmpty && !confirming
+  const displayedImageUrl = draft?.imageUrl || nextMaterialPreview?.image_url || ''
+  const displayedImageName = draft?.imageFilename || nextMaterialPreview?.filename || '标本图片'
 
   if (loading) {
     return <Loading />
@@ -399,7 +455,7 @@ export default function WorkbenchPage() {
 
           {/* 上传/预览区 */}
           <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-lg bg-gray-50">
-            {!draft && !extracting && (
+            {!draft && !nextMaterialPreview && !extracting && (
               <div
                 role="button"
                 tabIndex={0}
@@ -445,7 +501,7 @@ export default function WorkbenchPage() {
                     )}
                     <button
                       onClick={startNextMaterial}
-                      disabled={queueLoading}
+                      disabled={queueLoading || materialSummary.quota_exhausted}
                       className="flex items-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
                     >
                       {queueLoading ? (
@@ -453,7 +509,9 @@ export default function WorkbenchPage() {
                       ) : (
                         <ListStart className="h-4 w-4" />
                       )}
-                      开始处理下一张素材
+                      {materialSummary.quota_exhausted
+                        ? '配额已用尽'
+                        : '开始处理下一张素材'}
                     </button>
                   </div>
                 ) : materialSummary?.batch && materialSummary.total_count > 0 ? (
@@ -467,24 +525,52 @@ export default function WorkbenchPage() {
               </div>
             )}
 
-            {extracting && (
-              <div className="flex flex-col items-center gap-3">
-                <Loader2 className="h-10 w-10 animate-spin text-blue-500" />
-                <p className="text-sm text-blue-600">正在提取图片信息...</p>
-              </div>
-            )}
-
-            {draft && !extracting && (
+            {(draft || nextMaterialPreview) && (
               <div className="relative flex h-full w-full items-center justify-center overflow-auto">
                 <AuthenticatedImage
-                  src={draft.imagePath ? imageUrl(draft.imagePath) : ''}
-                  fallbackSrc={localImageUrl}
-                  alt="标本图片"
+                  key={`${displayedImageUrl}:${imageRetryKey}`}
+                  src={displayedImageUrl}
+                  fallbackSrc={draft ? localImageUrl : ''}
+                  onLoadError={handleImageLoadError}
+                  alt={displayedImageName}
                   className="max-h-full max-w-full object-contain transition-transform"
                   style={{
                     transform: `scale(${zoom}) rotate(${rotation}deg)`,
                   }}
                 />
+                {imageError && (
+                  <div className="absolute inset-x-4 bottom-4 rounded-lg border border-red-200 bg-white/95 p-3 text-center shadow-sm">
+                    <p className="text-xs text-red-600">
+                      识别结果已保留,但图片读取失败: {imageError}
+                    </p>
+                    <button
+                      onClick={() => {
+                        setImageError('')
+                        setImageRetryKey((key) => key + 1)
+                      }}
+                      className="mt-2 rounded-md border border-red-200 px-3 py-1 text-xs text-red-600 hover:bg-red-50"
+                    >
+                      重新加载图片
+                    </button>
+                  </div>
+                )}
+                {!draft && !extracting && (
+                  <button
+                    onClick={startNextMaterial}
+                    disabled={queueLoading || materialSummary?.quota_exhausted}
+                    className="absolute bottom-4 flex items-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white shadow hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <ListStart className="h-4 w-4" />
+                    开始识别这张素材
+                  </button>
+                )}
+              </div>
+            )}
+
+            {extracting && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-white/75">
+                <Loader2 className="h-10 w-10 animate-spin text-blue-500" />
+                <p className="text-sm text-blue-600">正在提取图片信息...</p>
               </div>
             )}
 
@@ -500,6 +586,14 @@ export default function WorkbenchPage() {
               }}
             />
           </div>
+
+          {materialSummary?.quota_exhausted && materialSummary.pending_count > 0 && (
+            <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+              工作流配额已用尽（已计费 {materialSummary.quota_charged}
+              {materialSummary.quota_total === null ? '' : ` / ${materialSummary.quota_total}`}）。
+              当前素材和图片已保留,管理员增加配额后可从本张继续处理。
+            </div>
+          )}
 
           {/* 图片控制工具栏 */}
           {draft && (
@@ -759,6 +853,7 @@ export default function WorkbenchPage() {
         <ExcelPreview
           draftRow={draft?.status === STATUS.AWAITING_CONFIRMATION ? draft.extracted : null}
           highlightRow={highlightRow}
+          refreshRevision={previewRevision}
         />
       </div>
 

@@ -16,8 +16,12 @@ interface MockColumn {
   editable?: boolean | ((row: MockRow) => boolean)
 }
 
-vi.mock('react-data-grid', () => ({
-  DataGrid: ({
+const scrollToCell = vi.hoisted(() => vi.fn())
+
+vi.mock('react-data-grid', async () => {
+  const React = await import('react')
+  return {
+    DataGrid: React.forwardRef(({
     columns,
     rows,
     onRowsChange,
@@ -28,8 +32,10 @@ vi.mock('react-data-grid', () => ({
       rows: MockRow[],
       change: { indexes: number[]; column: MockColumn },
     ) => void
-  }) => (
-    <div>
+  }, ref: React.ForwardedRef<{ scrollToCell: typeof scrollToCell }>) => {
+    React.useImperativeHandle(ref, () => ({ scrollToCell }))
+    return (
+      <div>
       {rows.flatMap((row, rowIndex) => columns.map((column) => {
         const editable = typeof column.editable === 'function'
           ? column.editable(row)
@@ -56,9 +62,11 @@ vi.mock('react-data-grid', () => ({
           </button>
         )
       }))}
-    </div>
-  ),
-}))
+      </div>
+    )
+  }),
+  }
+})
 
 vi.mock('@/services/preview', () => ({
   getPreview: vi.fn(),
@@ -121,6 +129,7 @@ describe('ExcelPreview inline editing', () => {
       id: 7,
       image_filename: '',
       image_path: '',
+      image_url: '/api/recognition/7/image',
       processed_image_path: '',
       rotation_degrees: 0,
       status: 'completed',
@@ -165,6 +174,52 @@ describe('ExcelPreview inline editing', () => {
 
     await waitFor(() => {
       expect(updateRecord).toHaveBeenCalledWith(7, { 鉴定人: '深圳湾' })
+    })
+  })
+
+  it('scrolls to a distant highlighted row through the grid handle', async () => {
+    const rows = Array.from({ length: 501 }, (_, index) => ({
+      excel_row: index + 3,
+      record_id: index + 1,
+      status: 'completed',
+      values: { 产地3: `地点${index + 1}`, 鉴定人: '' },
+    }))
+    vi.mocked(getPreview).mockResolvedValue({
+      ...preview,
+      rows,
+      completed_count: 501,
+      latest_write_row: 503,
+      next_write_row: 504,
+    })
+
+    render(
+      <ToastProvider>
+        <ExcelPreview highlightRow={503} />
+      </ToastProvider>,
+    )
+
+    await waitFor(() => {
+      expect(scrollToCell).toHaveBeenCalledWith({ rowIdx: 500 })
+    })
+  })
+
+  it('reloads when the same highlighted row receives a new revision', async () => {
+    const view = render(
+      <ToastProvider>
+        <ExcelPreview highlightRow={3} refreshRevision={1} />
+      </ToastProvider>,
+    )
+    await waitFor(() => expect(getPreview).toHaveBeenCalled())
+    const previousCalls = vi.mocked(getPreview).mock.calls.length
+
+    view.rerender(
+      <ToastProvider>
+        <ExcelPreview highlightRow={3} refreshRevision={2} />
+      </ToastProvider>,
+    )
+
+    await waitFor(() => {
+      expect(getPreview).toHaveBeenCalledTimes(previousCalls + 1)
     })
   })
 })

@@ -1,5 +1,10 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
-import { DataGrid, type Column, type RenderEditCellProps } from 'react-data-grid'
+import {
+  DataGrid,
+  type Column,
+  type DataGridHandle,
+  type RenderEditCellProps,
+} from 'react-data-grid'
 import { Loader2, Columns3, List, RefreshCw, TableProperties } from 'lucide-react'
 import { useToast } from '@/components/Toast'
 import EmptyState from '@/components/EmptyState'
@@ -39,16 +44,23 @@ interface ExcelPreviewProps {
   highlightRow?: number | null
   /** 高亮后是否自动滚动。 */
   autoScroll?: boolean
+  /** 强制刷新令牌,用于同一 Excel 行被覆盖时重新加载。 */
+  refreshRevision?: number
 }
 
-export default function ExcelPreview({ draftRow, highlightRow, autoScroll = true }: ExcelPreviewProps) {
+export default function ExcelPreview({
+  draftRow,
+  highlightRow,
+  autoScroll = true,
+  refreshRevision = 0,
+}: ExcelPreviewProps) {
   const { show } = useToast()
   const [data, setData] = useState<PreviewResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [mode, setMode] = useState<'target' | 'all'>('target')
   const [zoom, setZoom] = useState(100)
   const [savingCells, setSavingCells] = useState<Set<string>>(new Set())
-  const gridRef = useRef<HTMLDivElement>(null)
+  const gridRef = useRef<DataGridHandle>(null)
 
   const loadPreview = useCallback(async () => {
     setLoading(true)
@@ -74,12 +86,12 @@ export default function ExcelPreview({ draftRow, highlightRow, autoScroll = true
     loadPreview()
   }, [loadPreview])
 
-  // 当 highlightRow 变化时重新加载并滚动
+  // 完成或覆盖记录后重新加载。refreshRevision 可处理行号没有变化的覆盖。
   useEffect(() => {
     if (highlightRow) {
       loadPreview()
     }
-  }, [highlightRow]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [highlightRow, refreshRevision]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // 构建行号列 + 数据列
   const columns: Column<Row>[] = useMemo(() => {
@@ -270,19 +282,12 @@ export default function ExcelPreview({ draftRow, highlightRow, autoScroll = true
       })
   }, [data, rows, show])
 
-  // 自动滚动到高亮行
+  // 使用网格公开 API 定位虚拟化列表中的绝对行。
   useEffect(() => {
     if (autoScroll && highlightRow && rows.length > 0) {
       const idx = rows.findIndex((r) => r.__excel_row__ === highlightRow)
       if (idx >= 0 && gridRef.current) {
-        // react-data-grid 没有直接 scrollToRow API, 用 DOM 滚动
-        setTimeout(() => {
-          const grid = gridRef.current?.querySelector('.rdg')
-          if (grid) {
-            const rowEl = grid.querySelectorAll('[role="row"]')[idx + 1] // +1 跳过表头
-            rowEl?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-          }
-        }, 100)
+        gridRef.current.scrollToCell({ rowIdx: idx })
       }
     }
   }, [highlightRow, rows, autoScroll])
@@ -366,8 +371,9 @@ export default function ExcelPreview({ draftRow, highlightRow, autoScroll = true
       </div>
 
       {/* 数据网格 */}
-      <div ref={gridRef} className="flex-1 overflow-hidden" style={{ fontSize: `${zoom / 100 * 0.875}rem` }}>
+      <div className="flex-1 overflow-hidden" style={{ fontSize: `${zoom / 100 * 0.875}rem` }}>
         <DataGrid
+          ref={gridRef}
           columns={columns}
           rows={rows}
           onRowsChange={handleRowsChange}

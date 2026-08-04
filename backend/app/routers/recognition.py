@@ -16,7 +16,6 @@ from fastapi.responses import FileResponse
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from app.config import IMAGES_DIR
 from app.auth import AuthContext, get_auth_context
 from app.database import get_db
 from app.field_mapping import IMAGE_EXTRACTED_FIELDS
@@ -43,11 +42,32 @@ async def get_active_draft(
     if record is None:
         return None
     detail = svc.record_to_detail(record)
-    item = materials_service.get_linked_item(db, record.id)
+    item = materials_service.get_linked_item(db, record.id, ctx.owner_id)
     if item is not None:
         detail["material_item_id"] = item.id
         detail["material_batch_id"] = item.batch_id
     return detail
+
+
+@router.get("/{record_id}/image")
+async def get_record_image(
+    record_id: int,
+    ctx: AuthContext = Depends(get_auth_context),
+    db: Session = Depends(get_db),
+):
+    """Get a record image through its stable, owner-scoped identifier."""
+    record = db.query(SpecimenRecord).filter(
+        SpecimenRecord.id == record_id,
+        SpecimenRecord.owner_id == ctx.owner_id,
+    ).first()
+    if record is None:
+        raise HTTPException(status_code=404, detail="图片不存在")
+    image_path = materials_service.resolve_record_image_path(
+        db, record, ctx.owner_id
+    )
+    if image_path is None:
+        raise HTTPException(status_code=404, detail="图片不存在")
+    return FileResponse(str(image_path))
 
 
 @router.post("/{record_id}/discard")
@@ -87,10 +107,10 @@ async def get_image(
     ).order_by(SpecimenRecord.id.desc()).first()
     if record is None:
         raise HTTPException(status_code=404, detail="图片不存在")
-    img_path = Path(record.image_path)
-    if not img_path.is_file():
-        img_path = IMAGES_DIR / safe_name
-    if not img_path.exists():
+    img_path = materials_service.resolve_record_image_path(
+        db, record, ctx.owner_id
+    )
+    if img_path is None:
         raise HTTPException(status_code=404, detail="图片不存在")
     return FileResponse(str(img_path))
 
@@ -141,6 +161,7 @@ async def extract(
     return ExtractResponse(
         record_id=record.id,
         status=record.status,
+        image_url=f"/api/recognition/{record.id}/image",
         extracted=draft.get("extracted", {}),
         confidence=draft.get("confidence", {}),
         evidence=draft.get("evidence", {}),
@@ -167,6 +188,7 @@ async def re_extract(
     return ExtractResponse(
         record_id=record.id,
         status=record.status,
+        image_url=f"/api/recognition/{record.id}/image",
         extracted=draft.get("extracted", {}),
         confidence=draft.get("confidence", {}),
         evidence=draft.get("evidence", {}),

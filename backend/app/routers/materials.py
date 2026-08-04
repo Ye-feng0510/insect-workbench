@@ -118,6 +118,7 @@ async def next_extract(
         pending_count=summary_data["pending_count"],
         record_id=record.id,
         status=record.status,
+        image_url=f"/api/recognition/{record.id}/image",
         extracted=draft.get("extracted", {}),
         confidence=draft.get("confidence", {}),
         evidence=draft.get("evidence", {}),

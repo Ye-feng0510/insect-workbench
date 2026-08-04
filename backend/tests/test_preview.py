@@ -42,6 +42,7 @@ def client_with_template():
 
     app.dependency_overrides[get_db] = override_get_db
     client = TestClient(app)
+    client.test_session_factory = TestSession
 
     # 创建模板配置(指向真实模板文件)
     field_mapping = {
@@ -228,3 +229,39 @@ class TestPreview:
         )
         assert response.status_code == 409
         assert "图像编号已存在" in response.json()["detail"]
+
+    def test_preview_returns_all_records_beyond_legacy_limit(
+        self, client_with_template
+    ):
+        """limit 参数不截断记录，行顺序和写入元数据覆盖完整结果集。"""
+        TestSession = client_with_template.test_session_factory
+        with TestSession() as db:
+            db.add_all(
+                [
+                    SpecimenRecord(
+                        owner_id=1,
+                        zhongming=f"昆虫{index}",
+                        tuxiang=f"BULK-{index:03d}",
+                        status=STATUS_COMPLETED,
+                    )
+                    for index in range(105)
+                ]
+            )
+            db.commit()
+
+        response = client_with_template.get(
+            "/api/excel/preview?mode=target&limit=100"
+        )
+        assert response.status_code == 200
+        data = response.json()
+        record_rows = [
+            row for row in data["rows"] if row["status"] == "completed"
+        ]
+        assert len(record_rows) == 107
+        assert data["completed_count"] == 107
+        assert [row["record_id"] for row in record_rows] == sorted(
+            row["record_id"] for row in record_rows
+        )
+        assert record_rows[-1]["excel_row"] == 110
+        assert data["latest_write_row"] == 110
+        assert data["next_write_row"] == 111

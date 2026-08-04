@@ -34,12 +34,14 @@ from app.models import (
     PREFETCH_STATUS_QUEUED,
     PREFETCH_STATUS_READY,
     PREFETCH_STATUS_RUNNING,
+    ROLE_ADMIN,
     STATUS_DISCARDED,
     STATUS_EXTRACTION_FAILED,
     MaterialBatch,
     MaterialItem,
     MaterialPrefetchResult,
     SpecimenRecord,
+    User,
 )
 from app.services import recognition_service
 
@@ -56,6 +58,32 @@ def resolve_material_image_path(stored_path: str) -> Path:
             return portable
     matches = list(MATERIAL_IMAGES_DIR.rglob(stored.name))
     return matches[0] if len(matches) == 1 else stored
+
+
+def resolve_record_image_path(
+    db: Session,
+    record: SpecimenRecord,
+    owner_id: int,
+) -> Path | None:
+    """Resolve a record image using only server-persisted, owner-scoped sources."""
+    persisted = Path(record.image_path) if record.image_path else None
+    if persisted is not None and persisted.is_file():
+        return persisted
+
+    basename = persisted.name if persisted is not None else Path(
+        record.image_filename
+    ).name
+    if basename:
+        current = IMAGES_DIR / basename
+        if current.is_file():
+            return current
+
+    linked = get_linked_item(db, record.id, owner_id)
+    if linked is not None:
+        material_source = resolve_material_image_path(linked.stored_path)
+        if material_source.is_file():
+            return material_source
+    return None
 
 
 ALLOWED_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
@@ -78,6 +106,20 @@ def get_active_batch(db: Session, owner_id: int) -> MaterialBatch | None:
 
 def get_summary(db: Session, owner_id: int) -> dict[str, Any]:
     batch = get_active_batch(db, owner_id)
+    owner = db.get(User, owner_id)
+    unlimited = (
+        owner is None
+        or owner.role == ROLE_ADMIN
+        or owner.workflow_quota is None
+    )
+    quota_total = None if unlimited else owner.workflow_quota
+    quota_charged = owner.workflow_charged if owner is not None else 0
+    quota_reserved = owner.workflow_reserved if owner is not None else 0
+    quota_remaining = (
+        None
+        if quota_total is None
+        else max(quota_total - quota_charged - quota_reserved, 0)
+    )
     summary: dict[str, Any] = {
         "batch": batch,
         "total_count": 0,
@@ -86,6 +128,13 @@ def get_summary(db: Session, owner_id: int) -> dict[str, Any]:
         "completed_count": 0,
         "skipped_count": 0,
         "failed_count": 0,
+        "quota_total": quota_total,
+        "quota_charged": quota_charged,
+        "quota_reserved": quota_reserved,
+        "quota_remaining": quota_remaining,
+        "quota_exhausted": quota_remaining == 0
+        if quota_remaining is not None
+        else False,
     }
     if batch is None:
         return summary

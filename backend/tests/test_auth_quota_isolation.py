@@ -23,7 +23,12 @@ from app.models import (
     User,
     WorkflowUsage,
 )
-from app.services import prefetch_service, quota_service, recognition_service
+from app.services import (
+    materials_service,
+    prefetch_service,
+    quota_service,
+    recognition_service,
+)
 
 
 @pytest.fixture
@@ -234,7 +239,9 @@ def test_taxonomy_cache_is_owner_scoped(auth_env):
         )["Order"] == "Hemiptera"
 
 
-def test_template_and_image_assets_are_owner_scoped(auth_env, tmp_path):
+def test_template_and_image_assets_are_owner_scoped(
+    auth_env, tmp_path, monkeypatch
+):
     client, TestSession = auth_env
     alice_image = tmp_path / "alice-image.jpg"
     bob_image = tmp_path / "bob-image.jpg"
@@ -264,11 +271,95 @@ def test_template_and_image_assets_are_owner_scoped(auth_env, tmp_path):
         bob_record.image_filename = bob_image.name
         bob_record.image_path = str(bob_image)
         db.commit()
+        alice_record_id = alice_record.id
+        bob_record_id = bob_record.id
 
     _login(client, "alice", "alice-password-123")
     assert client.get("/api/templates/current").json()["original_filename"] == "alice.xlsx"
     assert client.get(f"/api/recognition/image/{alice_image.name}").content == b"alice"
+    assert client.get(
+        f"/api/recognition/{alice_record_id}/image"
+    ).content == b"alice"
+    assert client.get(
+        f"/api/records/{alice_record_id}"
+    ).json()["image_url"] == f"/api/recognition/{alice_record_id}/image"
+    assert client.get(
+        "/api/recognition/active-draft"
+    ).json()["image_url"] == f"/api/recognition/{alice_record_id}/image"
     assert client.get(f"/api/recognition/image/{bob_image.name}").status_code == 404
+    assert client.get(
+        f"/api/recognition/{bob_record_id}/image"
+    ).status_code == 404
+
+    current_images = tmp_path / "current-images"
+    current_images.mkdir()
+    current_fallback = current_images / "relocated.jpg"
+    current_fallback.write_bytes(b"current")
+    monkeypatch.setattr(materials_service, "IMAGES_DIR", current_images)
+    with TestSession() as db:
+        alice_record = db.get(SpecimenRecord, alice_record_id)
+        alice_record.image_path = str(tmp_path / "old" / "relocated.jpg")
+        batch = MaterialBatch(
+            owner_id=2,
+            original_filename="materials.zip",
+            stored_zip_path=str(tmp_path / "materials.zip"),
+            extract_dir=str(tmp_path),
+            is_active=True,
+        )
+        db.add(batch)
+        db.flush()
+        material_source = tmp_path / "material-source.jpg"
+        material_source.write_bytes(b"material")
+        db.add(
+            MaterialItem(
+                batch_id=batch.id,
+                sequence=1,
+                original_filename="alice-image.jpg",
+                archive_path="alice-image.jpg",
+                stored_path=str(material_source),
+                record_id=alice_record_id,
+            )
+        )
+        db.commit()
+
+    assert client.get(
+        f"/api/recognition/{alice_record_id}/image"
+    ).content == b"current"
+    current_fallback.unlink()
+    assert client.get(
+        f"/api/recognition/{alice_record_id}/image"
+    ).content == b"material"
+    assert client.get(
+        f"/api/recognition/image/{alice_image.name}"
+    ).content == b"material"
+    material_source.unlink()
+    assert client.get(
+        f"/api/recognition/{alice_record_id}/image"
+    ).status_code == 404
+
+
+def test_material_summary_uses_selected_owner_quota(auth_env):
+    client, TestSession = auth_env
+    with TestSession() as db:
+        alice = db.get(User, 2)
+        alice.workflow_reserved = 1
+        alice.workflow_charged = 1
+        db.commit()
+
+    _login(client, "admin", "admin-password-123")
+    admin_summary = client.get("/api/materials/summary").json()
+    assert admin_summary["quota_total"] is None
+    assert admin_summary["quota_remaining"] is None
+    assert admin_summary["quota_exhausted"] is False
+
+    alice_summary = client.get(
+        "/api/materials/summary", headers={"X-Owner-ID": "2"}
+    ).json()
+    assert alice_summary["quota_total"] == 2
+    assert alice_summary["quota_charged"] == 1
+    assert alice_summary["quota_reserved"] == 1
+    assert alice_summary["quota_remaining"] == 0
+    assert alice_summary["quota_exhausted"] is True
 
 
 def test_admin_user_quota_update_is_audited(auth_env):

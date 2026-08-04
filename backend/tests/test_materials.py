@@ -26,6 +26,7 @@ from app.models import (
     TaxonomyCache,
     User,
     ROLE_ADMIN,
+    ROLE_USER,
 )
 from app.routers import materials as materials_router
 from app.services import materials_service
@@ -806,4 +807,66 @@ def test_skip_item_clears_prefetch_result(materials_client):
         MaterialPrefetchResult.item_id == first_item_id,
     ).count() == 0
     db.close()
+
+
+def test_exhausted_quota_preserves_pending_item_and_image_access(
+    materials_client, monkeypatch
+):
+    client, TestSession = materials_client
+    with TestSession() as db:
+        owner = db.get(User, 1)
+        owner.role = ROLE_USER
+        owner.workflow_quota = 130
+        owner.workflow_charged = 130
+        db.commit()
+
+    assert upload_zip(client, {"quota.jpg": image_bytes()}).status_code == 200
+    preview = client.get("/api/materials/next-preview")
+    assert preview.status_code == 200
+    item_id = preview.json()["item_id"]
+    assert client.get(f"/api/materials/image/{item_id}").status_code == 200
+
+    exhausted = client.post("/api/materials/next-extract")
+    assert exhausted.status_code == 429
+    with TestSession() as db:
+        item = db.get(MaterialItem, item_id)
+        assert item.status == MATERIAL_STATUS_PENDING
+        assert item.record_id is None
+        owner = db.get(User, 1)
+        owner.workflow_quota = 131
+        db.commit()
+
+    async def fake_extract(
+        db,
+        image_path,
+        image_filename,
+        rotation_degrees=0,
+        record=None,
+    ):
+        record.status = STATUS_AWAITING_CONFIRMATION
+        record.extracted_draft_json = json.dumps(
+            {
+                "extracted": {"中名": "恢复识别", "图像": "QUOTA-131"},
+                "confidence": {},
+                "evidence": {},
+                "warnings": [],
+            },
+            ensure_ascii=False,
+        )
+        db.commit()
+        db.refresh(record)
+        return record
+
+    monkeypatch.setattr(
+        materials_service.recognition_service,
+        "extract_image_info",
+        fake_extract,
+    )
+    resumed = client.post("/api/materials/next-extract")
+    assert resumed.status_code == 200
+    assert resumed.json()["material_item_id"] == item_id
+    assert resumed.json()["image_url"] == (
+        f"/api/recognition/{resumed.json()['record_id']}/image"
+    )
+    assert client.get(resumed.json()["image_url"]).status_code == 200
 

@@ -611,6 +611,7 @@ def record_to_detail(record: SpecimenRecord) -> dict[str, Any]:
         "id": record.id,
         "image_filename": record.image_filename,
         "image_path": record.image_path,
+        "image_url": f"/api/recognition/{record.id}/image",
         "processed_image_path": record.processed_image_path,
         "rotation_degrees": record.rotation_degrees,
         "status": record.status,
