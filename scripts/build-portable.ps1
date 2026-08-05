@@ -94,6 +94,7 @@ if (-not $antlrWheel) {
 }
 & $BuildPython -m pip install `
     --target $sitePackages `
+    --no-compile `
     --only-binary=:all: `
     --find-links $wheelCache `
     --platform win_amd64 `
@@ -182,10 +183,10 @@ import rapidocr
 import sqlalchemy
 import uvicorn
 root = pathlib.Path(sys.executable).resolve().parents[2]
-assert struct.calcsize("P") * 8 == 64
+assert struct.calcsize('P') * 8 == 64
 assert sys.version_info[:3] == (3, 12, 10)
-assert (root / "backend" / "app" / "main.py").is_file()
-assert (root / "frontend" / "dist" / "index.html").is_file()
+assert (root / 'backend' / 'app' / 'main.py').is_file()
+assert (root / 'frontend' / 'dist' / 'index.html').is_file()
 print(sys.version)
 "@
 & $embeddedPython -I -B -c $smokeCode
@@ -194,8 +195,18 @@ if ($LASTEXITCODE -ne 0) {
 }
 Get-ChildItem -LiteralPath $packageRoot -Recurse -Directory `
     -Filter "__pycache__" | Remove-Item -Recurse -Force
-Get-ChildItem -LiteralPath $packageRoot -Recurse -File -Include "*.pyc", "*.pyo" |
+Get-ChildItem -LiteralPath $packageRoot -Recurse -File |
+    Where-Object { $_.Extension -in @(".pyc", ".pyo") } |
     Remove-Item -Force
+foreach ($required in @(
+    "runtime\python\python.exe",
+    "backend\app\main.py",
+    "frontend\dist\index.html"
+)) {
+    if (-not (Test-Path -LiteralPath (Join-Path $packageRoot $required) -PathType Leaf)) {
+        throw "便携包清理后缺少必要文件：$required"
+    }
+}
 
 Write-Host "[6/7] 扫描便携包敏感文件..."
 $forbidden = Get-ChildItem -LiteralPath $packageRoot -Recurse -Force |
