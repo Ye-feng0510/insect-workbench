@@ -21,7 +21,13 @@ def _utcnow() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
 
 
-def reserve(db: Session, owner_id: int, record_id: int) -> WorkflowUsage:
+def reserve(
+    db: Session,
+    owner_id: int,
+    record_id: int,
+    *,
+    commit_changes: bool = True,
+) -> WorkflowUsage:
     usage = (
         db.query(WorkflowUsage)
         .filter(WorkflowUsage.record_id == record_id)
@@ -60,8 +66,11 @@ def reserve(db: Session, owner_id: int, record_id: int) -> WorkflowUsage:
         usage.status = USAGE_RESERVED
         usage.reserved_at = _utcnow()
         usage.released_at = None
-    db.commit()
-    db.refresh(usage)
+    if commit_changes:
+        db.commit()
+        db.refresh(usage)
+    else:
+        db.flush()
     return usage
 
 

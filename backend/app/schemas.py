@@ -4,7 +4,56 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+
+WORKFLOW_CONFIRMED_FIELDS = frozenset(
+    {
+        "中名",
+        "产地3",
+        "图像",
+        "采集人",
+        "采集日期",
+        "鉴定人",
+        "标签学名",
+        "命名人",
+    }
+)
+WORKFLOW_TAXONOMY_FIELDS = frozenset(
+    {
+        "Phylum",
+        "纲",
+        "Class",
+        "Order",
+        "中文科名",
+        "科名",
+        "属名",
+        "种名",
+        "亚科",
+        "族",
+        "亚属",
+        "Subfamily",
+        "Tribe",
+        "Subgenus",
+    }
+)
+
+
+def _validate_workflow_fields(
+    values: dict[str, str],
+    *,
+    allowed: frozenset[str],
+    max_length: int,
+    long_fields: frozenset[str] = frozenset(),
+) -> dict[str, str]:
+    unknown = set(values) - allowed
+    if unknown:
+        raise ValueError(f"包含不支持的字段: {', '.join(sorted(unknown))}")
+    for key, value in values.items():
+        limit = 300 if key in long_fields else max_length
+        if len(value) > limit:
+            raise ValueError(f"字段 {key} 最长为 {limit} 个字符")
+    return values
 
 
 class LoginRequest(BaseModel):
@@ -144,6 +193,12 @@ class ExtractResponse(BaseModel):
     warnings: list[str] = []
 
 
+class ReExtractRequest(BaseModel):
+    """重新识别请求，可更新实际模型输入所使用的旋转角度。"""
+
+    rotation_degrees: int | None = Field(default=None, ge=0, lt=360)
+
+
 class ConfirmExtractionRequest(BaseModel):
     """确认图片信息并自动入表请求。"""
     # 用户最终确认或修改后的 5 个图片信息字段
@@ -159,6 +214,61 @@ class ConfirmExtractionResponse(BaseModel):
     fields: dict[str, str]
     excel_row: int
     warnings: list[str] = []
+
+
+class ResolveTaxonomyRequest(BaseModel):
+    confirmed: dict[str, str]
+    scientific_name: str = Field(default="", max_length=300)
+    authorship: str = Field(default="", max_length=300)
+
+    @field_validator("confirmed")
+    @classmethod
+    def validate_confirmed(
+        cls, values: dict[str, str]
+    ) -> dict[str, str]:
+        return _validate_workflow_fields(
+            values,
+            allowed=WORKFLOW_CONFIRMED_FIELDS,
+            max_length=200,
+            long_fields=frozenset({"标签学名", "命名人"}),
+        )
+
+
+class WorkflowMessageRequest(BaseModel):
+    content: str = Field(min_length=1, max_length=4000)
+
+
+class WorkflowCommitRequest(BaseModel):
+    expected_revision: int = Field(ge=0)
+    taxonomy: dict[str, str]
+    confirmed: dict[str, str] | None = None
+    duplicate_action: str | None = Field(default=None, pattern="^replace$")
+    manual_override_reason: str = Field(default="", max_length=1000)
+
+    @field_validator("taxonomy")
+    @classmethod
+    def validate_taxonomy_fields(
+        cls, values: dict[str, str]
+    ) -> dict[str, str]:
+        return _validate_workflow_fields(
+            values,
+            allowed=WORKFLOW_TAXONOMY_FIELDS,
+            max_length=200,
+        )
+
+    @field_validator("confirmed")
+    @classmethod
+    def validate_confirmed_fields(
+        cls, values: dict[str, str] | None
+    ) -> dict[str, str] | None:
+        if values is None:
+            return None
+        return _validate_workflow_fields(
+            values,
+            allowed=WORKFLOW_CONFIRMED_FIELDS,
+            max_length=200,
+            long_fields=frozenset({"标签学名", "命名人"}),
+        )
 
 
 class DuplicateConflict(BaseModel):

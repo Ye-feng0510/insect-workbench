@@ -25,6 +25,7 @@ from app.schemas import (
     ConfirmExtractionResponse,
     DuplicateConflict,
     ExtractResponse,
+    ReExtractRequest,
 )
 from app.services import recognition_service as svc
 from app.services import materials_service
@@ -172,6 +173,7 @@ async def extract(
 @router.post("/{record_id}/re-extract", response_model=ExtractResponse)
 async def re_extract(
     record_id: int,
+    req: ReExtractRequest | None = None,
     ctx: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db),
 ):
@@ -183,6 +185,8 @@ async def re_extract(
     if record is None:
         raise HTTPException(status_code=404, detail="记录不存在")
 
+    if req is not None and req.rotation_degrees is not None:
+        record.rotation_degrees = req.rotation_degrees
     record = await svc.re_extract_image_info(db, record)
     draft = svc.parse_extracted_draft(record)
     return ExtractResponse(

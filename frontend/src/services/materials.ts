@@ -32,11 +32,16 @@ export async function uploadMaterialZip(file: File): Promise<MaterialSummary> {
   return data
 }
 
-export async function extractNextMaterial(): Promise<MaterialExtractResponse> {
+export async function extractNextMaterial(
+  rotationDegrees: number = 0,
+): Promise<MaterialExtractResponse> {
   const { data } = await api.post<MaterialExtractResponse>(
     '/materials/next-extract',
     null,
-    { timeout: 130_000 },
+    {
+      params: { rotation_degrees: rotationDegrees },
+      timeout: 130_000,
+    },
   )
   return data
 }

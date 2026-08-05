@@ -8,6 +8,7 @@
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version 2.0
+$PayloadSchemaVersion = 6
 
 $updaterRoot = $PSScriptRoot
 $manifestPath = Join-Path $updaterRoot "manifest.json"
@@ -31,6 +32,37 @@ function Get-FullPath([string]$Path) {
         [IO.Path]::DirectorySeparatorChar,
         [IO.Path]::AltDirectorySeparatorChar
     )
+}
+
+function ConvertTo-WindowsCommandLineArgument([string]$Argument) {
+    if ($Argument.Length -eq 0) {
+        return '""'
+    }
+    if ($Argument -notmatch '[\s"]') {
+        return $Argument
+    }
+
+    $encoded = New-Object Text.StringBuilder
+    [void]$encoded.Append('"')
+    $backslashes = 0
+    foreach ($character in $Argument.ToCharArray()) {
+        if ($character -eq [char]92) {
+            $backslashes++
+            continue
+        }
+        if ($character -eq '"') {
+            [void]$encoded.Append([char]92, (2 * $backslashes) + 1)
+            [void]$encoded.Append('"')
+        }
+        else {
+            [void]$encoded.Append([char]92, $backslashes)
+            [void]$encoded.Append($character)
+        }
+        $backslashes = 0
+    }
+    [void]$encoded.Append([char]92, 2 * $backslashes)
+    [void]$encoded.Append('"')
+    return $encoded.ToString()
 }
 
 function Test-SamePath([string]$Left, [string]$Right) {
@@ -357,14 +389,24 @@ function Assert-Payload($Manifest) {
     }
 }
 
-function Assert-StateEquivalent($Before, $After, [switch]$RequireSchema4) {
+function Assert-StateEquivalent(
+    $Before,
+    $After,
+    [int]$MinimumSchemaVersion = 0
+) {
     $beforeDb = $Before.database
     $afterDb = $After.database
     if (-not $afterDb.present -or -not $afterDb.integrity.ok) {
         throw "Updated database is missing or failed integrity_check."
     }
-    if ($RequireSchema4 -and [int]$afterDb.schema_version -lt 4) {
-        throw "Updated database schema_version is below 4."
+    if (
+        $MinimumSchemaVersion -gt 0 -and
+        [int]$afterDb.schema_version -lt $MinimumSchemaVersion
+    ) {
+        throw (
+            "Updated database schema_version is below {0}." -f
+            $MinimumSchemaVersion
+        )
     }
     if (
         -not $beforeDb.app_settings_fingerprint.available -or
@@ -570,13 +612,16 @@ try {
         $env:INSECT_PORTABLE_NO_BROWSER = "1"
     }
     try {
+        $launchArguments = @(
+            "-I", "-B",
+            "-m", "uvicorn", "app.main:app",
+            "--host", "127.0.0.1", "--port", "8000",
+            "--app-dir", $embeddedBackend
+        ) | ForEach-Object {
+            ConvertTo-WindowsCommandLineArgument ([string]$_)
+        }
         $startedLauncher = Start-Process -FilePath $embeddedPython `
-            -ArgumentList @(
-                "-I", "-B",
-                "-m", "uvicorn", "app.main:app",
-                "--host", "127.0.0.1", "--port", "8000",
-                "--app-dir", $embeddedBackend
-            ) `
+            -ArgumentList ([string]::Join(" ", [string[]]$launchArguments)) `
             -WorkingDirectory $InstallRoot -PassThru `
             -WindowStyle Hidden
     }
@@ -595,7 +640,8 @@ try {
         throw "Healthy service is not owned by the updated portable runtime."
     }
     $newState = Invoke-Inspector $InstallRoot $newStatePath
-    Assert-StateEquivalent $oldState $newState -RequireSchema4
+    Assert-StateEquivalent $oldState $newState `
+        -MinimumSchemaVersion $PayloadSchemaVersion
     if (
         $envHash -ne
         (Get-FileHash -LiteralPath (Join-Path $InstallRoot ".env") -Algorithm SHA256).Hash

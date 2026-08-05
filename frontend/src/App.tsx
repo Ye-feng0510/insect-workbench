@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
 import Layout from './components/Layout'
 import SettingsPage from './pages/SettingsPage'
+import AIWorkbenchPage from './pages/AIWorkbenchPage'
 import WorkbenchPage from './pages/WorkbenchPage'
 import RecordsPage from './pages/RecordsPage'
 import ExportPage from './pages/ExportPage'
@@ -27,7 +28,8 @@ export default function App() {
           </RequireAuth>
         )}
       >
-        <Route index element={<Navigate to="/workbench" replace />} />
+        <Route index element={<Navigate to="/agent-workbench" replace />} />
+        <Route path="/agent-workbench" element={<AIWorkbenchPage />} />
         <Route path="/workbench" element={<WorkbenchPage />} />
         <Route path="/materials" element={<MaterialsPage />} />
         <Route path="/records" element={<RecordsPage />} />
@@ -48,7 +50,7 @@ export default function App() {
             </RequireAdmin>
           )}
         />
-        <Route path="*" element={<Navigate to="/workbench" replace />} />
+        <Route path="*" element={<Navigate to="/agent-workbench" replace />} />
       </Route>
     </Routes>
   )

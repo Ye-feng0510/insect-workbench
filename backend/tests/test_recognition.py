@@ -1,11 +1,251 @@
 """识别服务测试:分类校验逻辑(不依赖真实模型)。"""
 import asyncio
+from types import SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
 
+from app.routers.recognition import re_extract
+from app.schemas import ReExtractRequest
 from app.services import recognition_service
 from app.services.recognition_service import validate_taxonomy, validate_confirmed_fields
 from app.field_mapping import TAXONOMY_FIELDS
+
+
+def test_re_extract_applies_requested_rotation(monkeypatch):
+    record = SimpleNamespace(
+        id=12,
+        owner_id=7,
+        rotation_degrees=0,
+        status="awaiting_confirmation",
+    )
+
+    class FakeQuery:
+        def filter(self, *args):
+            return self
+
+        def first(self):
+            return record
+
+    class FakeDb:
+        def query(self, model):
+            return FakeQuery()
+
+    received: dict[str, int] = {}
+
+    async def fake_re_extract(db, selected_record):
+        received["rotation"] = selected_record.rotation_degrees
+        return selected_record
+
+    monkeypatch.setattr(
+        recognition_service,
+        "re_extract_image_info",
+        fake_re_extract,
+    )
+    monkeypatch.setattr(
+        recognition_service,
+        "parse_extracted_draft",
+        lambda selected_record: {
+            "extracted": {},
+            "confidence": {},
+            "evidence": {},
+            "warnings": [],
+        },
+    )
+
+    response = asyncio.run(
+        re_extract(
+            12,
+            ReExtractRequest(rotation_degrees=270),
+            SimpleNamespace(owner_id=7),
+            FakeDb(),
+        )
+    )
+
+    assert received["rotation"] == 270
+    assert response.record_id == 12
+
+
+def test_re_extract_rejects_out_of_range_rotation():
+    with pytest.raises(ValidationError):
+        ReExtractRequest(rotation_degrees=360)
+
+
+def _re_extract_test_state():
+    record = SimpleNamespace(
+        id=12,
+        owner_id=7,
+        image_path="unused.jpg",
+        rotation_degrees=0,
+        status="awaiting_confirmation",
+        warnings_json="",
+        confirmed_extraction_json='{"confirmed": {"中名": "旧值"}}',
+    )
+    workflow = SimpleNamespace(
+        id=33,
+        record_id=record.id,
+        state="awaiting_confirmation",
+        revision=4,
+    )
+
+    class FakeQuery:
+        def filter(self, *args):
+            return self
+
+        def first(self):
+            return workflow
+
+    class FakeDb:
+        def query(self, model):
+            return FakeQuery()
+
+        def commit(self):
+            return None
+
+        def expire_all(self):
+            return None
+
+        def get(self, model, object_id):
+            if object_id == record.id:
+                return record
+            if object_id == workflow.id:
+                return workflow
+            return None
+
+        def refresh(self, value):
+            return None
+
+    return record, workflow, FakeDb()
+
+
+def test_re_extract_rejects_result_after_workflow_changes(monkeypatch):
+    record, workflow, db = _re_extract_test_state()
+
+    async def recognize(*args, **kwargs):
+        workflow.state = "discarded"
+        workflow.revision += 1
+        record.status = "discarded"
+        return {"中名": "过期结果", "_ocr": {"lines": [], "warnings": []}}
+
+    monkeypatch.setattr(
+        recognition_service,
+        "_get_model_client",
+        lambda _db: object(),
+    )
+    monkeypatch.setattr(
+        recognition_service,
+        "_load_recognition_prompt",
+        lambda _db: "prompt",
+    )
+    monkeypatch.setattr(
+        recognition_service,
+        "recognize_image_with_ocr",
+        recognize,
+    )
+    monkeypatch.setattr(
+        recognition_service.quota_service,
+        "reserve",
+        lambda *_args: None,
+    )
+
+    with pytest.raises(Exception) as exc_info:
+        asyncio.run(recognition_service.re_extract_image_info(db, record))
+
+    assert exc_info.value.status_code == 409
+    assert record.status == "discarded"
+    assert not hasattr(record, "raw_model_response")
+
+
+def test_re_extract_increments_workflow_revision_on_success(monkeypatch):
+    record, workflow, db = _re_extract_test_state()
+
+    async def recognize(*args, **kwargs):
+        return {
+            "中名": "新结果",
+            "标签学名": "Cicindela chinensis",
+            "命名人": "De Geer",
+            "_ocr": {"lines": [], "warnings": []},
+        }
+
+    monkeypatch.setattr(
+        recognition_service,
+        "_get_model_client",
+        lambda _db: object(),
+    )
+    monkeypatch.setattr(
+        recognition_service,
+        "_load_recognition_prompt",
+        lambda _db: "prompt",
+    )
+    monkeypatch.setattr(
+        recognition_service,
+        "recognize_image_with_ocr",
+        recognize,
+    )
+    monkeypatch.setattr(
+        recognition_service.quota_service,
+        "reserve",
+        lambda *_args: None,
+    )
+
+    result = asyncio.run(recognition_service.re_extract_image_info(db, record))
+
+    assert result.status == "awaiting_confirmation"
+    assert workflow.state == "awaiting_confirmation"
+    assert workflow.revision == 6
+    assert result.confirmed_extraction_json == ""
+
+
+class TestRecognitionParts:
+    def test_restores_complete_location_from_exact_suffix_evidence(self):
+        extracted, _, evidence, warnings = recognition_service._recognition_parts(
+            {
+                "产地3": "西丽果场",
+                "evidence": {"产地3": "深圳西丽果场"},
+                "warnings": [],
+            }
+        )
+
+        assert extracted["产地3"] == "深圳西丽果场"
+        assert evidence["产地3"] == "深圳西丽果场"
+        assert any("完整地点层级" in warning for warning in warnings)
+
+    def test_keeps_matching_location_unchanged(self):
+        extracted, _, _, warnings = recognition_service._recognition_parts(
+            {
+                "产地3": "深圳西丽果场",
+                "evidence": {"产地3": "深圳西丽果场"},
+                "warnings": [],
+            }
+        )
+
+        assert extracted["产地3"] == "深圳西丽果场"
+        assert warnings == []
+
+    def test_does_not_replace_location_with_conflicting_evidence(self):
+        extracted, _, _, warnings = recognition_service._recognition_parts(
+            {
+                "产地3": "深圳西丽果场",
+                "evidence": {"产地3": "深圳梧桐山"},
+                "warnings": [],
+            }
+        )
+
+        assert extracted["产地3"] == "深圳西丽果场"
+        assert warnings == []
+
+    def test_normalizes_structured_metadata_types(self):
+        _, confidence, evidence, warnings = recognition_service._recognition_parts(
+            {
+                "confidence": "high",
+                "evidence": ["深圳西丽果场"],
+                "warnings": "需要复核",
+            }
+        )
+
+        assert confidence == {}
+        assert evidence == {}
+        assert warnings == ["需要复核"]
 
 
 class TestTaxonomyValidation:

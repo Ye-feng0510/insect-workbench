@@ -255,8 +255,24 @@ export interface ExportResult {
 /** 提取后端错误消息。 */
 export function extractErrorMessage(err: unknown, fallback = '操作失败'): string {
   if (err && typeof err === 'object') {
-    const any = err as { response?: { data?: { detail?: string } }; message?: string }
-    if (any.response?.data?.detail) return any.response.data.detail
+    const any = err as { response?: { data?: { detail?: unknown } }; message?: string }
+    const detail = any.response?.data?.detail
+    if (typeof detail === 'string' && detail) return detail
+    if (Array.isArray(detail)) {
+      const messages = detail.flatMap((item) => {
+        if (typeof item === 'string') return item
+        if (item && typeof item === 'object') {
+          const message = (item as { msg?: unknown }).msg
+          return typeof message === 'string' ? message : []
+        }
+        return []
+      })
+      if (messages.length > 0) return messages.join('；')
+    }
+    if (detail && typeof detail === 'object') {
+      const message = (detail as { message?: unknown }).message
+      if (typeof message === 'string' && message) return message
+    }
     if (any.message) return any.message
   }
   return fallback

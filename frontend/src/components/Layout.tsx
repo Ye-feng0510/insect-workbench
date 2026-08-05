@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { NavLink, Outlet } from 'react-router-dom'
+import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import {
   Microscope,
+  MessageSquare,
   Images,
   Table,
   Download,
@@ -16,7 +17,8 @@ import { getCurrentTemplate } from '@/services/templates'
 import { useAuth } from '@/contexts/auth'
 
 const businessNavItems = [
-  { to: '/workbench', label: '识别工作台', icon: Microscope },
+  { to: '/agent-workbench', label: '智能体工作台', icon: MessageSquare },
+  { to: '/workbench', label: '经典识别工作台', icon: Microscope },
   { to: '/materials', label: '数据素材图片', icon: Images },
   { to: '/records', label: '记录管理', icon: Table },
   { to: '/export', label: '模板与导出', icon: Download },
@@ -45,6 +47,7 @@ export interface LayoutOutletContext {
 }
 
 export default function Layout() {
+  const location = useLocation()
   const {
     user,
     adminUsers,
@@ -183,9 +186,13 @@ export default function Layout() {
           </div>
         </div>
       </aside>
-      <main className="flex-1 overflow-auto p-6">
+      <main className={
+        location.pathname === '/agent-workbench'
+          ? 'min-w-0 flex-1 overflow-hidden'
+          : 'min-w-0 flex-1 overflow-auto p-6'
+      }>
         <Outlet
-          key={selectedOwnerId ?? user?.id}
+          key={`${user?.role ?? 'anonymous'}:${selectedOwnerId ?? user?.id ?? ''}`}
           context={{ refreshTemplateStatus } satisfies LayoutOutletContext}
         />
       </main>

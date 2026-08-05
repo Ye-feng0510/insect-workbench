@@ -62,6 +62,17 @@ export default function WorkbenchPage() {
   const [prefetchStatus, setPrefetchStatus] = useState<MaterialPrefetchStatus | null>(null)
   const [localImageUrl, setLocalImageUrl] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
+  const extractionLockRef = useRef(false)
+  const editRevisionRef = useRef(0)
+  const mountedRef = useRef(false)
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      extractionLockRef.current = false
+    }
+  }, [])
 
   useEffect(() => {
     if (!originalFile) {
@@ -181,6 +192,7 @@ export default function WorkbenchPage() {
 
   // 上传图片
   const handleFileSelect = async (file: File) => {
+    if (extractionLockRef.current || confirming || skipping) return
     // 如果已有活跃草稿,弹窗确认
     if (draft && ACTIVE_DRAFT_STATUSES.includes(draft.status as never)) {
       setPendingFile(file)
@@ -191,10 +203,13 @@ export default function WorkbenchPage() {
   }
 
   const startExtraction = async (file: File, rot: number) => {
+    if (extractionLockRef.current) return
+    extractionLockRef.current = true
     setExtracting(true)
     setOriginalFile(file)
     try {
       const result = await extractImage(file, rot)
+      if (!mountedRef.current) return
       setDraft({
         recordId: result.record_id,
         status: result.status,
@@ -209,26 +224,34 @@ export default function WorkbenchPage() {
       setImageError('')
       show('图片信息提取完成,请核查确认', 'success')
     } catch (e) {
+      if (!mountedRef.current) return
       show(extractErrorMessage(e, '图片识别失败'), 'error')
       setDraft(null)
       setOriginalFile(null)
     } finally {
-      setExtracting(false)
+      if (mountedRef.current) {
+        extractionLockRef.current = false
+        setExtracting(false)
+      }
     }
   }
 
   const startNextMaterial = async () => {
+    if (extractionLockRef.current) return
+    extractionLockRef.current = true
+    const selectedRotation = rotation
     setQueueLoading(true)
     setExtracting(true)
     try {
-      const result = await extractNextMaterial()
+      const result = await extractNextMaterial(selectedRotation)
+      if (!mountedRef.current) return
       setDraft({
         recordId: result.record_id,
         status: result.status,
         imageFilename: result.original_filename,
         imagePath: '',
         imageUrl: result.image_url,
-        rotation: 0,
+        rotation: selectedRotation,
         extracted: result.extracted,
         confidence: result.confidence,
         warnings: result.warnings,
@@ -239,12 +262,13 @@ export default function WorkbenchPage() {
       setNextMaterialPreview(null)
       setImageError('')
       setZoom(1)
-      setRotation(0)
+      setRotation(selectedRotation)
       getMaterialSummary()
         .then(setMaterialSummary)
         .catch(() => undefined)
       show('素材图片识别完成,请核查确认', 'success')
     } catch (e) {
+      if (!mountedRef.current) return
       const status = (e as { response?: { status?: number } }).response?.status
       if (status === 429) {
         setMaterialSummary(await getMaterialSummary().catch(() => materialSummary))
@@ -252,32 +276,48 @@ export default function WorkbenchPage() {
       } else {
         show(extractErrorMessage(e, '加载下一张素材失败'), 'error')
         await loadDraft()
+        if (!mountedRef.current) return
       }
     } finally {
-      setQueueLoading(false)
-      setExtracting(false)
+      if (mountedRef.current) {
+        extractionLockRef.current = false
+        setQueueLoading(false)
+        setExtracting(false)
+      }
     }
     refreshPrefetchStatus()
   }
 
   const handleReExtract = async () => {
-    if (!draft) return
+    if (!draft || extractionLockRef.current || confirming || skipping) return
+    const requestRevision = editRevisionRef.current
+    extractionLockRef.current = true
     setExtracting(true)
     try {
-      const result = await reExtract(draft.recordId)
+      const result = await reExtract(draft.recordId, rotation)
+      if (!mountedRef.current) return
+      if (editRevisionRef.current !== requestRevision) {
+        show('字段已在重新识别期间修改，已忽略过期识别结果', 'info')
+        return
+      }
       setDraft(prev => prev ? {
         ...prev,
         status: result.status,
         imageUrl: result.image_url,
+        rotation,
         extracted: { ...prev.extracted, ...result.extracted },
         confidence: result.confidence,
         warnings: result.warnings,
       } : null)
       show('重新识别完成', 'success')
     } catch (e) {
+      if (!mountedRef.current) return
       show(extractErrorMessage(e, '重新识别失败'), 'error')
     } finally {
-      setExtracting(false)
+      if (mountedRef.current) {
+        extractionLockRef.current = false
+        setExtracting(false)
+      }
     }
   }
 
@@ -293,6 +333,7 @@ export default function WorkbenchPage() {
 
     try {
       const summary = await getMaterialSummary()
+      if (!mountedRef.current) return
       setMaterialSummary(summary)
       clearWorkbench()
       setHighlightRow(excelRow)
@@ -309,7 +350,7 @@ export default function WorkbenchPage() {
   }
 
   const handleConfirm = async () => {
-    if (!draft) return
+    if (!draft || extractionLockRef.current || skipping) return
     const zhongming = draft.extracted['中名']?.trim()
     const tuxiang = draft.extracted['图像']?.trim()
     if (!zhongming) {
@@ -323,6 +364,7 @@ export default function WorkbenchPage() {
     setConfirming(true)
     try {
       const result = await confirmExtraction(draft.recordId, draft.extracted)
+      if (!mountedRef.current) return
       if (result.status === STATUS.COMPLETED) {
         await finishCompletedRecord(
           result.excel_row,
@@ -345,6 +387,7 @@ export default function WorkbenchPage() {
           if (choice) {
             // 用户选择覆盖,重新提交
             const result = await confirmExtraction(draft.recordId, draft.extracted, 'replace')
+            if (!mountedRef.current) return
             if (result.status === STATUS.COMPLETED) {
               await finishCompletedRecord(
                 result.excel_row,
@@ -376,6 +419,7 @@ export default function WorkbenchPage() {
   }
 
   const handleClear = () => {
+    if (extractionLockRef.current || confirming || skipping) return
     if (!draft) {
       clearWorkbench()
       return
@@ -394,10 +438,13 @@ export default function WorkbenchPage() {
       !draft?.materialItemId
       || draft.status === STATUS.COMPLETED
       || skipping
+      || extracting
+      || extractionLockRef.current
     ) return
     setSkipping(true)
     try {
       const summary = await skipMaterial(draft.materialItemId)
+      if (!mountedRef.current) return
       setMaterialSummary(summary)
       clearWorkbench()
       show('已跳过当前素材', 'info')
@@ -423,6 +470,8 @@ export default function WorkbenchPage() {
 
   // 更新字段
   const updateField = (field: string, value: string) => {
+    if (extractionLockRef.current || confirming || skipping) return
+    editRevisionRef.current += 1
     setDraft(prev => prev ? {
       ...prev,
       extracted: { ...prev.extracted, [field]: value },
@@ -431,7 +480,7 @@ export default function WorkbenchPage() {
 
   const zhongmingEmpty = !draft?.extracted['中名']?.trim()
   const tuxiangEmpty = !draft?.extracted['图像']?.trim()
-  const canConfirm = draft?.status === STATUS.AWAITING_CONFIRMATION && !zhongmingEmpty && !tuxiangEmpty && !confirming
+  const canConfirm = draft?.status === STATUS.AWAITING_CONFIRMATION && !zhongmingEmpty && !tuxiangEmpty && !confirming && !extracting
   const displayedImageUrl = draft?.imageUrl || nextMaterialPreview?.image_url || ''
   const displayedImageName = draft?.imageFilename || nextMaterialPreview?.filename || '标本图片'
 
@@ -578,6 +627,7 @@ export default function WorkbenchPage() {
               ref={fileRef}
               type="file"
               accept=".jpg,.jpeg,.png,.webp"
+              disabled={extracting || confirming || skipping}
               className="hidden"
               onChange={(e) => {
                 const f = e.target.files?.[0]
@@ -617,6 +667,7 @@ export default function WorkbenchPage() {
                 <div className="mx-1 h-4 w-px bg-gray-200" />
                 <button
                   onClick={() => handleRotate('ccw')}
+                  disabled={extracting}
                   className="rounded-md p-1.5 text-gray-500 hover:bg-gray-100"
                   title="逆时针旋转"
                 >
@@ -624,6 +675,7 @@ export default function WorkbenchPage() {
                 </button>
                 <button
                   onClick={() => handleRotate('cw')}
+                  disabled={extracting}
                   className="rounded-md p-1.5 text-gray-500 hover:bg-gray-100"
                   title="顺时针旋转"
                 >
@@ -632,6 +684,7 @@ export default function WorkbenchPage() {
                 <div className="mx-1 h-4 w-px bg-gray-200" />
                 <button
                   onClick={() => { setZoom(1); setRotation(0) }}
+                  disabled={extracting}
                   className="rounded-md px-2 py-1 text-xs text-gray-500 hover:bg-gray-100"
                 >
                   重置
@@ -669,7 +722,12 @@ export default function WorkbenchPage() {
                 )}
                 <button
                   onClick={handleClear}
-                  disabled={draft.status === STATUS.COMPLETED}
+                  disabled={
+                    draft.status === STATUS.COMPLETED
+                    || extracting
+                    || confirming
+                    || skipping
+                  }
                   className="flex items-center gap-1.5 rounded-md border border-red-200 px-3 py-1.5 text-xs text-red-500 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
@@ -738,7 +796,15 @@ export default function WorkbenchPage() {
                         type={field === '采集日期' ? 'date' : 'text'}
                         value={value}
                         onChange={(e) => updateField(field, e.target.value)}
-                        disabled={draft.status !== STATUS.AWAITING_CONFIRMATION && draft.status !== STATUS.EXTRACTION_FAILED}
+                        disabled={
+                          extracting
+                          || confirming
+                          || skipping
+                          || (
+                            draft.status !== STATUS.AWAITING_CONFIRMATION
+                            && draft.status !== STATUS.EXTRACTION_FAILED
+                          )
+                        }
                         className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-1 ${
                           isRequired && isEmpty && draft.status === STATUS.AWAITING_CONFIRMATION
                             ? 'border-red-300 focus:border-red-500 focus:ring-red-500'
@@ -765,7 +831,15 @@ export default function WorkbenchPage() {
                       maxLength={200}
                       value={draft.extracted[field] ?? ''}
                       onChange={(e) => updateField(field, e.target.value)}
-                      disabled={draft.status !== STATUS.AWAITING_CONFIRMATION && draft.status !== STATUS.EXTRACTION_FAILED}
+                      disabled={
+                        extracting
+                        || confirming
+                        || skipping
+                        || (
+                          draft.status !== STATUS.AWAITING_CONFIRMATION
+                          && draft.status !== STATUS.EXTRACTION_FAILED
+                        )
+                      }
                       className={`w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 ${
                         draft.status !== STATUS.AWAITING_CONFIRMATION && draft.status !== STATUS.EXTRACTION_FAILED ? 'bg-gray-50' : ''
                       }`}
@@ -876,7 +950,9 @@ export default function WorkbenchPage() {
                 继续处理当前草稿
               </button>
               <button
+                disabled={extracting || confirming || skipping}
                 onClick={async () => {
+                  if (extractionLockRef.current || confirming || skipping) return
                   if (draft) {
                     await discardDraft(draft.recordId)
                     setMaterialSummary(await getMaterialSummary().catch(() => materialSummary))

@@ -99,10 +99,10 @@ class TestPreview:
         data = resp.json()
         assert data["sheet_name"] == "实际要录入的表格"
         assert data["mode"] == "target"
-        assert data["base_write_row"] == 4
+        assert data["base_write_row"] == 8
         assert data["completed_count"] == 2
-        assert data["next_write_row"] == 6
-        assert data["latest_write_row"] == 5
+        assert data["next_write_row"] == 10
+        assert data["latest_write_row"] == 9
 
         # 列应该是 14 个目标字段
         assert len(data["columns"]) == 14
@@ -111,20 +111,20 @@ class TestPreview:
         assert "图像" in col_fields
         assert "鉴定人" in col_fields
 
-        # 模板行(header_row+1=2 到 base_write_row-1=3)
+        # 模板行(header_row+1=2 到 base_write_row-1=7)
         template_rows = [r for r in data["rows"] if r["status"] == "template"]
-        assert len(template_rows) == 2  # 行2和行3
+        assert len(template_rows) == 6  # 行2到行7
 
         # 已完成记录行
         record_rows = [r for r in data["rows"] if r["status"] == "completed"]
         assert len(record_rows) == 2
-        # 第一条记录在 base_write_row=4
-        assert record_rows[0]["excel_row"] == 4
+        # 第一条记录在 base_write_row=8
+        assert record_rows[0]["excel_row"] == 8
         assert record_rows[0]["values"]["中名"] == "二点红蝽"
         assert record_rows[0]["values"]["图像"] == "PSZP-00842"
         assert record_rows[0]["values"]["鉴定人"] == "王五"
-        # 第二条记录在 base_write_row+1=5
-        assert record_rows[1]["excel_row"] == 5
+        # 第二条记录在 base_write_row+1=9
+        assert record_rows[1]["excel_row"] == 9
         assert record_rows[1]["values"]["中名"] == "中华螽斯"
 
     def test_all_mode_preview(self, client_with_template):
@@ -262,6 +262,6 @@ class TestPreview:
         assert [row["record_id"] for row in record_rows] == sorted(
             row["record_id"] for row in record_rows
         )
-        assert record_rows[-1]["excel_row"] == 110
-        assert data["latest_write_row"] == 110
-        assert data["next_write_row"] == 111
+        assert record_rows[-1]["excel_row"] == 114
+        assert data["latest_write_row"] == 114
+        assert data["next_write_row"] == 115

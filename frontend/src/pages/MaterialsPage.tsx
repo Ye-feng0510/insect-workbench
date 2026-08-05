@@ -144,7 +144,7 @@ export default function MaterialsPage() {
         </div>
         {summary?.batch && summary.pending_count + summary.processing_count > 0 ? (
           <button
-            onClick={() => navigate('/workbench')}
+            onClick={() => navigate('/agent-workbench')}
             className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700"
           >
             前往识别工作台

@@ -43,6 +43,7 @@ from app.database import Base
 STATUS_UPLOADED = "uploaded"
 STATUS_EXTRACTING = "extracting"
 STATUS_AWAITING_CONFIRMATION = "awaiting_confirmation"
+STATUS_AWAITING_TAXONOMY_CONFIRMATION = "awaiting_taxonomy_confirmation"
 STATUS_CLASSIFYING = "classifying"
 STATUS_COMPLETED = "completed"
 STATUS_EXTRACTION_FAILED = "extraction_failed"
@@ -62,6 +63,7 @@ ACTIVE_DRAFT_STATUSES = frozenset(
         STATUS_UPLOADED,
         STATUS_EXTRACTING,
         STATUS_AWAITING_CONFIRMATION,
+        STATUS_AWAITING_TAXONOMY_CONFIRMATION,
         STATUS_CLASSIFYING,
         STATUS_EXTRACTION_FAILED,
         STATUS_CLASSIFICATION_FAILED,
@@ -192,6 +194,14 @@ class SpecimenRecord(Base):
     caiji_riqi: Mapped[str] = mapped_column(String(20), default="")
     jiandingren: Mapped[str] = mapped_column(String(200), default="")
 
+    # 会话式工作流内部证据（不改变现有 14 个 Excel 字段）
+    scientific_name: Mapped[str] = mapped_column(String(300), default="")
+    scientific_name_authorship: Mapped[str] = mapped_column(String(300), default="")
+    subfamily: Mapped[str] = mapped_column(String(200), default="")
+    tribe: Mapped[str] = mapped_column(String(200), default="")
+    subgenus: Mapped[str] = mapped_column(String(200), default="")
+    taxonomy_verification_json: Mapped[str] = mapped_column(Text, default="")
+
     # 时间戳
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.current_timestamp()
@@ -238,6 +248,114 @@ class TaxonomyCache(Base):
     ke: Mapped[str] = mapped_column(String(200), default="")
     shu: Mapped[str] = mapped_column(String(200), default="")
     zhong: Mapped[str] = mapped_column(String(200), default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        server_default=func.current_timestamp(),
+        onupdate=func.current_timestamp(),
+    )
+
+
+class WorkflowSession(Base):
+    """Owner-scoped conversational workflow for one specimen draft."""
+
+    __tablename__ = "workflow_sessions"
+    __table_args__ = (UniqueConstraint("record_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    owner_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    record_id: Mapped[int] = mapped_column(
+        ForeignKey("specimen_records.id", ondelete="CASCADE"),
+        unique=True,
+        index=True,
+    )
+    material_item_id: Mapped[int | None] = mapped_column(
+        ForeignKey("material_items.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    result_record_id: Mapped[int | None] = mapped_column(
+        ForeignKey("specimen_records.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    state: Mapped[str] = mapped_column(String(50), default=STATUS_AWAITING_CONFIRMATION)
+    revision: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        server_default=func.current_timestamp(),
+        onupdate=func.current_timestamp(),
+    )
+
+
+class WorkflowMessage(Base):
+    """Structured, inert conversation message."""
+
+    __tablename__ = "workflow_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[int] = mapped_column(
+        ForeignKey("workflow_sessions.id", ondelete="CASCADE"), index=True
+    )
+    record_id: Mapped[int] = mapped_column(
+        ForeignKey("specimen_records.id", ondelete="CASCADE"), index=True
+    )
+    actor: Mapped[str] = mapped_column(String(20))
+    message_type: Mapped[str] = mapped_column(String(50), default="explanation")
+    content_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp()
+    )
+
+
+class TaxonomyResolution(Base):
+    """Immutable revision of authority lookup and fallback evidence."""
+
+    __tablename__ = "taxonomy_resolutions"
+    __table_args__ = (
+        UniqueConstraint("workflow_id", "revision"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    owner_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    workflow_id: Mapped[int] = mapped_column(
+        ForeignKey("workflow_sessions.id", ondelete="CASCADE"), index=True
+    )
+    revision: Mapped[int] = mapped_column(Integer)
+    query_name: Mapped[str] = mapped_column(String(300), default="")
+    proposal_json: Mapped[str] = mapped_column(Text, default="{}")
+    lineage_json: Mapped[str] = mapped_column(Text, default="{}")
+    provenance_json: Mapped[str] = mapped_column(Text, default="{}")
+    conflicts_json: Mapped[str] = mapped_column(Text, default="[]")
+    verification_level: Mapped[str] = mapped_column(String(30), default="unverified")
+    source: Mapped[str] = mapped_column(String(50), default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp()
+    )
+
+
+class TaxonConceptCache(Base):
+    """Versioned authority response cache used for offline fallback."""
+
+    __tablename__ = "taxon_concept_cache"
+    __table_args__ = (
+        UniqueConstraint("provider", "policy_version", "query_name"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    provider: Mapped[str] = mapped_column(String(50), index=True)
+    policy_version: Mapped[str] = mapped_column(String(100), index=True)
+    query_name: Mapped[str] = mapped_column(String(300), index=True)
+    match_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.current_timestamp()
     )

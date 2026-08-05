@@ -252,6 +252,32 @@ class VisionModelClient:
         raw = await self._chat(messages, max_tokens=800)
         return self._parse_json_response(raw)
 
+    async def explain_taxonomy(
+        self,
+        question: str,
+        context: dict[str, Any],
+    ) -> str:
+        """Answer a read-only taxonomy question from trusted structured context."""
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "你是昆虫标本分类核验助手。只能解释提供的结构化字段、"
+                    "核验等级、冲突和来源，不得声称执行搜索、修改记录、"
+                    "调用工具或写入 Excel。权威来源缺失或结果未验证时必须"
+                    "明确说明不确定性。回答简洁，不输出 Markdown 表格。"
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"结构化上下文：{json.dumps(context, ensure_ascii=False)}\n"
+                    f"用户问题：{question}"
+                ),
+            },
+        ]
+        return await self._chat(messages, max_tokens=600)
+
     # ============================================================
     # JSON 解析(清单第 9 节:处理非合法 JSON)
     # ============================================================

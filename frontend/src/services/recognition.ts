@@ -18,10 +18,15 @@ export async function extractImage(
   return data
 }
 
-export async function reExtract(recordId: number): Promise<ExtractResponse> {
+export async function reExtract(
+  recordId: number,
+  rotationDegrees?: number,
+): Promise<ExtractResponse> {
   const { data } = await api.post<ExtractResponse>(
     `/recognition/${recordId}/re-extract`,
-    null,
+    rotationDegrees === undefined
+      ? null
+      : { rotation_degrees: rotationDegrees },
     { timeout: 130_000 },
   )
   return data

@@ -42,6 +42,7 @@ from app.models import (
     MaterialPrefetchResult,
     SpecimenRecord,
     User,
+    WorkflowSession,
 )
 from app.services import recognition_service
 
@@ -671,6 +672,14 @@ def skip_item(db: Session, item_id: int, owner_id: int) -> dict[str, Any]:
         record = db.get(SpecimenRecord, item.record_id)
         if record is not None and record.status != "completed":
             record.status = STATUS_DISCARDED
+            workflow = (
+                db.query(WorkflowSession)
+                .filter(WorkflowSession.record_id == record.id)
+                .first()
+            )
+            if workflow is not None:
+                workflow.state = STATUS_DISCARDED
+                workflow.revision += 1
             from app.services import quota_service
             quota_service.release(db, record.id)
             if record.image_path:

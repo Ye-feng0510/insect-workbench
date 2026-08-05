@@ -3,6 +3,7 @@ export const STATUS = {
   UPLOADED: 'uploaded',
   EXTRACTING: 'extracting',
   AWAITING_CONFIRMATION: 'awaiting_confirmation',
+  AWAITING_TAXONOMY_CONFIRMATION: 'awaiting_taxonomy_confirmation',
   CLASSIFYING: 'classifying',
   COMPLETED: 'completed',
   EXTRACTION_FAILED: 'extraction_failed',
@@ -17,8 +18,10 @@ export const ACTIVE_DRAFT_STATUSES: RecordStatus[] = [
   STATUS.UPLOADED,
   STATUS.EXTRACTING,
   STATUS.AWAITING_CONFIRMATION,
+  STATUS.AWAITING_TAXONOMY_CONFIRMATION,
   STATUS.CLASSIFYING,
   STATUS.EXTRACTION_FAILED,
+  STATUS.CLASSIFICATION_FAILED,
 ]
 
 /** 状态中文标签。 */
@@ -26,6 +29,7 @@ export const STATUS_LABELS: Record<string, string> = {
   uploaded: '已上传',
   extracting: '正在提取图片信息',
   awaiting_confirmation: '等待确认图片信息',
+  awaiting_taxonomy_confirmation: '等待确认分类信息',
   classifying: '正在整理分类信息',
   completed: '已完成并填表',
   extraction_failed: '图片识别失败',
@@ -38,6 +42,7 @@ export const STATUS_COLORS: Record<string, string> = {
   uploaded: 'bg-gray-100 text-gray-600',
   extracting: 'bg-blue-100 text-blue-700',
   awaiting_confirmation: 'bg-yellow-100 text-yellow-700',
+  awaiting_taxonomy_confirmation: 'bg-blue-100 text-blue-700',
   classifying: 'bg-purple-100 text-purple-700',
   completed: 'bg-emerald-100 text-emerald-700',
   extraction_failed: 'bg-red-100 text-red-700',

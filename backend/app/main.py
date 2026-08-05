@@ -18,6 +18,7 @@ from app.routers import export as export_router
 from app.routers import materials as materials_router
 from app.routers import auth as auth_router
 from app.routers import admin as admin_router
+from app.routers import workflows as workflows_router
 from app.services.prefetch_service import PrefetchWorker
 
 
@@ -106,6 +107,7 @@ app.include_router(excel_preview_router.router)
 app.include_router(records_router.router)
 app.include_router(export_router.router)
 app.include_router(materials_router.router)
+app.include_router(workflows_router.router)
 
 
 # 生产模式: 托管前端静态资源,其他前端路由回退到 index.html

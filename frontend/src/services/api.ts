@@ -11,6 +11,8 @@ const UNSAFE_METHODS = new Set(['post', 'put', 'patch', 'delete'])
 
 let currentUserIsAdmin = false
 let selectedOwnerId: number | null = null
+let ownerContextKey = 'user'
+let ownerContextController = new AbortController()
 
 function readCookie(name: string): string | null {
   if (typeof document === 'undefined') return null
@@ -52,8 +54,15 @@ export function hasSessionHint(): boolean {
 }
 
 export function configureOwnerHeader(isAdmin: boolean, ownerId: number | null): void {
+  const nextOwnerId = isAdmin ? ownerId : null
+  const nextContextKey = isAdmin ? `admin:${nextOwnerId ?? ''}` : 'user'
+  if (nextContextKey !== ownerContextKey) {
+    ownerContextController.abort()
+    ownerContextController = new AbortController()
+    ownerContextKey = nextContextKey
+  }
   currentUserIsAdmin = isAdmin
-  selectedOwnerId = isAdmin ? ownerId : null
+  selectedOwnerId = nextOwnerId
 }
 
 function isOwnerScopedRequest(url = ''): boolean {
@@ -64,6 +73,10 @@ function isOwnerScopedRequest(url = ''): boolean {
 
 api.interceptors.request.use((config) => {
   const method = config.method?.toLowerCase() ?? 'get'
+  const ownerScoped = isOwnerScopedRequest(config.url)
+  const requestIsAdmin = currentUserIsAdmin
+  const requestOwnerId = selectedOwnerId
+  const requestOwnerSignal = ownerContextController.signal
   if (UNSAFE_METHODS.has(method) && config.url !== '/auth/login') {
     const csrfToken = getCsrfToken()
     if (csrfToken) {
@@ -71,13 +84,16 @@ api.interceptors.request.use((config) => {
     }
   }
   if (
-    currentUserIsAdmin
-    && selectedOwnerId !== null
-    && isOwnerScopedRequest(config.url)
+    requestIsAdmin
+    && requestOwnerId !== null
+    && ownerScoped
   ) {
-    config.headers.set('X-Owner-ID', String(selectedOwnerId))
+    config.headers.set('X-Owner-ID', String(requestOwnerId))
   } else {
     config.headers.delete('X-Owner-ID')
+  }
+  if (ownerScoped && !config.signal) {
+    config.signal = requestOwnerSignal
   }
   return config
 })
@@ -95,7 +111,10 @@ api.interceptors.response.use(
     const url = response.config.url ?? ''
     if (
       UNSAFE_METHODS.has(method)
-      && QUOTA_CHANGING_PATHS.some((path) => url.includes(path))
+      && (
+        QUOTA_CHANGING_PATHS.some((path) => url.includes(path))
+        || (url.includes('/workflows/') && url.endsWith('/commit'))
+      )
       && typeof window !== 'undefined'
     ) {
       window.dispatchEvent(new Event('auth:quota-changed'))

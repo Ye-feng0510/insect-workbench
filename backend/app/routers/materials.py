@@ -103,11 +103,14 @@ async def upload_materials(
 
 @router.post("/next-extract", response_model=MaterialExtractResponse)
 async def next_extract(
+    rotation_degrees: int = 0,
     ctx: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db),
 ):
     item, record = await materials_service.start_next_item(
-        db, owner_id=ctx.owner_id
+        db,
+        rotation_degrees=rotation_degrees,
+        owner_id=ctx.owner_id,
     )
     draft = recognition_service.parse_extracted_draft(record)
     summary_data = materials_service.get_summary(db, ctx.owner_id)

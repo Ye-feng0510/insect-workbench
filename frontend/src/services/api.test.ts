@@ -1,4 +1,8 @@
-import { AxiosError, AxiosHeaders } from 'axios'
+import {
+  AxiosError,
+  AxiosHeaders,
+  type InternalAxiosRequestConfig,
+} from 'axios'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import api, { configureOwnerHeader, setCsrfToken } from './api'
 
@@ -66,6 +70,56 @@ describe('API authentication interceptors', () => {
       },
     })
     expect(capturedHeaders.has('X-Owner-ID')).toBe(false)
+  })
+
+  it('cancels in-flight owner requests when an administrator switches owner', async () => {
+    configureOwnerHeader(true, 42)
+    let resolveRequest!: (value: {
+      data: unknown
+      status: number
+      statusText: string
+      headers: object
+      config: InternalAxiosRequestConfig
+    }) => void
+    let capturedConfig: InternalAxiosRequestConfig | undefined
+    const pending = api.get('/materials/summary', {
+      adapter: async (config) => {
+        capturedConfig = config
+        return new Promise((resolve) => {
+          resolveRequest = resolve
+        })
+      },
+    })
+
+    await vi.waitFor(() => {
+      expect(capturedConfig?.headers.get('X-Owner-ID')).toBe('42')
+    })
+    configureOwnerHeader(true, 99)
+    resolveRequest({
+      data: {},
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      config: capturedConfig!,
+    })
+
+    await expect(pending).rejects.toMatchObject({ code: 'ERR_CANCELED' })
+  })
+
+  it('refreshes quota state after a conversational workflow commit', async () => {
+    const listener = vi.fn()
+    window.addEventListener('auth:quota-changed', listener)
+    await api.post('/workflows/12/commit', { taxonomy: {} }, {
+      adapter: async (config) => ({
+        data: {},
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config,
+      }),
+    })
+    expect(listener).toHaveBeenCalledTimes(1)
+    window.removeEventListener('auth:quota-changed', listener)
   })
 
   it.each([

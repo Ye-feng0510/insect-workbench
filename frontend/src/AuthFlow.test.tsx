@@ -43,7 +43,7 @@ vi.mock('@/services/templates', () => ({
 const { workbenchMounted } = vi.hoisted(() => ({
   workbenchMounted: vi.fn(),
 }))
-vi.mock('./pages/WorkbenchPage', () => ({
+vi.mock('./pages/AIWorkbenchPage', () => ({
   default: function MockWorkbenchPage() {
     useEffect(() => {
       workbenchMounted()
@@ -126,7 +126,7 @@ describe('frontend authentication and RBAC', () => {
     setCsrfToken('stale-session')
     vi.mocked(getCurrentUser).mockRejectedValueOnce(new Error('unauthorized'))
 
-    renderApp('/workbench')
+    renderApp('/agent-workbench')
 
     expect(
       await screen.findByRole('heading', { name: '昆虫标本工作台' }),
@@ -138,7 +138,7 @@ describe('frontend authentication and RBAC', () => {
     vi.mocked(getCurrentUser).mockReset()
     setCsrfToken('existing-session')
     vi.mocked(getCurrentUser).mockResolvedValueOnce(ordinaryUser)
-    renderApp('/workbench')
+    renderApp('/agent-workbench')
 
     expect(await screen.findByRole('heading', { name: '工作台内容' })).toBeInTheDocument()
     expect(screen.queryByRole('link', { name: '设置' })).not.toBeInTheDocument()
@@ -190,7 +190,7 @@ describe('frontend authentication and RBAC', () => {
     vi.mocked(getCurrentUser).mockReset()
     setCsrfToken('existing-session')
     vi.mocked(getCurrentUser).mockResolvedValueOnce(adminUser)
-    renderApp('/workbench')
+    renderApp('/agent-workbench')
 
     expect(await screen.findByRole('heading', { name: '工作台内容' })).toBeInTheDocument()
     expect(workbenchMounted).toHaveBeenCalledTimes(1)

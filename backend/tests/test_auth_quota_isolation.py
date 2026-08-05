@@ -16,6 +16,7 @@ from app.models import (
     ROLE_ADMIN,
     ROLE_USER,
     STATUS_AWAITING_CONFIRMATION,
+    AppSettings,
     ExcelTemplate,
     MaterialBatch,
     MaterialItem,
@@ -536,7 +537,7 @@ def test_partial_auth_tables_resume_legacy_migration(tmp_path, monkeypatch):
             text("SELECT COUNT(*) FROM users WHERE username='bootstrap'")
         ).scalar_one()
     assert owner_id == admin_id
-    assert versions == [1, 2, 3, 4]
+    assert versions == [1, 2, 3, 4, 5, 6]
     assert admin_count == 1
     assert len(list(tmp_path.glob("legacy.db.backup-*"))) == 1
 
@@ -579,7 +580,7 @@ def test_legacy_migration_assigns_bootstrap_admin(tmp_path, monkeypatch):
             text("SELECT jiandingren FROM specimen_records WHERE id=1")
         ).scalar_one()
     assert owner == admin_id
-    assert versions == [1, 2, 3, 4]
+    assert versions == [1, 2, 3, 4, 5, 6]
     assert {"jiandingren", "ocr_result_json"}.issubset(columns)
     assert jiandingren == ""
     assert "uq_specimen_owner_tuxiang_completed" in indexes
@@ -641,6 +642,116 @@ def test_v4_migration_backfills_existing_identifier_mapping(tmp_path):
     with Session(engine) as db:
         mapping = json.loads(db.query(ExcelTemplate).one().field_mapping_json)
     assert mapping == {"中名": "A", "图像": "B", "鉴定人": "C"}
+
+
+def test_authentic_v4_to_v6_migration_preserves_records_and_settings(tmp_path):
+    path = tmp_path / "v4.db"
+    engine = create_engine(f"sqlite:///{path}")
+    workflow_tables = {
+        "workflow_sessions",
+        "workflow_messages",
+        "taxonomy_resolutions",
+        "taxon_concept_cache",
+    }
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            table
+            for table in Base.metadata.sorted_tables
+            if table.name not in workflow_tables
+        ],
+    )
+    with Session(engine) as db:
+        db.add(
+            User(
+                id=1,
+                username="admin",
+                password_hash=hash_password("admin-password-123"),
+                role=ROLE_ADMIN,
+                is_active=True,
+            )
+        )
+        db.add(
+            AppSettings(
+                id=1,
+                base_url="https://model.example/v1",
+                api_key="preserved-test-value",
+                model_name="test-model",
+                recognition_prompt="preserved recognition prompt",
+                taxonomy_prompt="preserved taxonomy prompt",
+            )
+        )
+        db.add(
+            SpecimenRecord(
+                id=9,
+                owner_id=1,
+                status="completed",
+                tuxiang="LEGACY-V4",
+                zhongming="旧记录",
+            )
+        )
+        db.commit()
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE schema_version ("
+            "version INTEGER PRIMARY KEY, applied_at DATETIME NOT NULL "
+            "DEFAULT CURRENT_TIMESTAMP)"
+        ))
+        conn.execute(text(
+            "INSERT INTO schema_version(version) VALUES (1), (2), (3), (4)"
+        ))
+        for column in (
+            "scientific_name",
+            "scientific_name_authorship",
+            "subfamily",
+            "tribe",
+            "subgenus",
+            "taxonomy_verification_json",
+        ):
+            conn.execute(text(f"ALTER TABLE specimen_records DROP COLUMN {column}"))
+
+    assert workflow_tables.isdisjoint(inspect(engine).get_table_names())
+
+    migrate(engine)
+    with engine.connect() as conn:
+        versions = conn.execute(
+            text("SELECT version FROM schema_version ORDER BY version")
+        ).scalars().all()
+        record = conn.execute(
+            text(
+                "SELECT owner_id,zhongming,tuxiang,scientific_name "
+                "FROM specimen_records WHERE id=9"
+            )
+        ).one()
+        preserved_settings = conn.execute(
+            text(
+                "SELECT base_url,api_key,model_name,recognition_prompt,"
+                "taxonomy_prompt FROM app_settings WHERE id=1"
+            )
+        ).one()
+        tables = set(inspect(engine).get_table_names())
+        workflow_columns = {
+            column["name"]
+            for column in inspect(engine).get_columns("workflow_sessions")
+        }
+        workflow_indexes = {
+            row[1]
+            for row in conn.execute(
+                text("PRAGMA index_list('workflow_sessions')")
+            )
+        }
+    assert versions == [1, 2, 3, 4, 5, 6]
+    assert tuple(record) == (1, "旧记录", "LEGACY-V4", "")
+    assert tuple(preserved_settings) == (
+        "https://model.example/v1",
+        "preserved-test-value",
+        "test-model",
+        "preserved recognition prompt",
+        "preserved taxonomy prompt",
+    )
+    assert workflow_tables.issubset(tables)
+    assert "result_record_id" in workflow_columns
+    assert "ix_workflow_sessions_result_record_id" in workflow_indexes
 
 
 def test_exhausted_user_is_skipped_by_prefetch(auth_env, monkeypatch, tmp_path):

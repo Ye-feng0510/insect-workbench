@@ -23,14 +23,7 @@ from app.services import recognition_service, template_service
 
 def _get_active_template_or_400(db: Session, owner_id: int) -> ExcelTemplate:
     """获取活跃模板,不存在则 400。"""
-    template = (
-        db.query(ExcelTemplate)
-        .filter(
-            ExcelTemplate.owner_id == owner_id,
-            ExcelTemplate.is_active == True,  # noqa: E712
-        )
-        .first()
-    )
+    template = template_service.get_active_template(db, owner_id)
     if template is None or not template.target_sheet:
         raise HTTPException(
             status_code=400,

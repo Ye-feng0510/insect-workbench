@@ -16,7 +16,7 @@ from app.config import EXPORTS_DIR, settings
 from app.database import Base
 from app.models import ExcelTemplate, ExportArtifact, ROLE_ADMIN, User
 
-LATEST_SCHEMA_VERSION = 4
+LATEST_SCHEMA_VERSION = 6
 
 
 def _validate_new_admin_credentials(username: str, password: str) -> None:
@@ -351,10 +351,53 @@ def migrate(engine: Engine) -> None:
                 )
             conn.execute(text("INSERT INTO schema_version(version) VALUES (4)"))
 
+        if 5 not in applied:
+            additions = {
+                "scientific_name": "VARCHAR(300) NOT NULL DEFAULT ''",
+                "scientific_name_authorship": "VARCHAR(300) NOT NULL DEFAULT ''",
+                "subfamily": "VARCHAR(200) NOT NULL DEFAULT ''",
+                "tribe": "VARCHAR(200) NOT NULL DEFAULT ''",
+                "subgenus": "VARCHAR(200) NOT NULL DEFAULT ''",
+                "taxonomy_verification_json": "TEXT NOT NULL DEFAULT ''",
+            }
+            if "specimen_records" in existing_tables:
+                record_columns = _columns(conn, "specimen_records")
+                for column, definition in additions.items():
+                    if column not in record_columns:
+                        conn.execute(
+                            text(
+                                f"ALTER TABLE specimen_records ADD COLUMN "
+                                f"{column} {definition}"
+                            )
+                        )
+            conn.execute(text("INSERT INTO schema_version(version) VALUES (5)"))
+
+        if 6 not in applied:
+            if (
+                "workflow_sessions" in existing_tables
+                and "result_record_id"
+                not in _columns(conn, "workflow_sessions")
+            ):
+                conn.execute(
+                    text(
+                        "ALTER TABLE workflow_sessions ADD COLUMN "
+                        "result_record_id INTEGER REFERENCES "
+                        "specimen_records(id) ON DELETE SET NULL"
+                    )
+                )
+            conn.execute(text("INSERT INTO schema_version(version) VALUES (6)"))
+
     # Creates only missing tables; ownership changes above never rely on create_all.
     Base.metadata.create_all(bind=engine)
     _backfill_jiandingren_mappings(engine)
     with engine.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS "
+                "ix_workflow_sessions_result_record_id "
+                "ON workflow_sessions(result_record_id)"
+            )
+        )
         conn.execute(
             text(
                 "CREATE INDEX IF NOT EXISTS ix_material_queue "

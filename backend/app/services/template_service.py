@@ -90,7 +90,7 @@ def upload_template(db: Session, file: UploadFile, owner_id: int) -> ExcelTempla
 
 def get_active_template(db: Session, owner_id: int) -> ExcelTemplate | None:
     """获取当前活跃模板。"""
-    return (
+    template = (
         db.query(ExcelTemplate)
         .filter(
             ExcelTemplate.owner_id == owner_id,
@@ -98,6 +98,23 @@ def get_active_template(db: Session, owner_id: int) -> ExcelTemplate | None:
         )
         .first()
     )
+    if (
+        template is not None
+        and template.target_sheet
+        and template.field_mapping_json
+    ):
+        mapping = json.loads(template.field_mapping_json)
+        safe_row = calculate_base_write_row(
+            template,
+            template.target_sheet,
+            template.start_row,
+            mapping,
+        )
+        if template.base_write_row != safe_row:
+            template.base_write_row = safe_row
+            db.commit()
+            db.refresh(template)
+    return template
 
 
 def get_template_or_404(
@@ -205,13 +222,12 @@ def calculate_base_write_row(
 ) -> int:
     """计算 base_write_row(清单 12.2 节)。
 
-    从 start_row 开始,在"图像"列中查找第一个可写空白行;
-    若没有空白行,则使用当前最后一个已用行的下一行。
+    从 start_row 开始查找最后一个含任一非空单元格的行，并在其后写入。
+    不能复用中间空行，否则连续导出多条记录时可能覆盖空行之后的
+    甲方模板数据。只有格式而没有值的行不视为已占用。
     """
-    tuxiang_letter = field_mapping.get("图像")
-    if not tuxiang_letter:
-        # 没有图像列映射,直接用 start_row
-        return start_row
+    # 保留该参数以兼容现有调用方；占用检测必须覆盖映射外的客户列。
+    _ = field_mapping
 
     try:
         wb = load_workbook(resolve_template_path(template), read_only=True)
@@ -219,26 +235,21 @@ def calculate_base_write_row(
         raise HTTPException(status_code=400, detail=f"读取模板失败: {e}") from e
 
     ws = wb[sheet_name]
-    # 将列字母转为列序号
-    from openpyxl.utils import column_index_from_string
-
-    img_col = column_index_from_string(tuxiang_letter)
-
-    first_blank = None
     last_used = start_row - 1
 
-    for r in range(start_row, ws.max_row + 1):
-        v = ws.cell(r, img_col).value
-        if v is None or (isinstance(v, str) and v.strip() == ""):
-            if first_blank is None:
-                first_blank = r
-        else:
-            last_used = r
+    for row_number, values in enumerate(
+        ws.iter_rows(min_row=start_row, values_only=True),
+        start=start_row,
+    ):
+        row_is_blank = all(
+            value is None
+            or (isinstance(value, str) and value.strip() == "")
+            for value in values
+        )
+        if not row_is_blank:
+            last_used = row_number
 
     wb.close()
-
-    if first_blank is not None:
-        return first_blank
     return last_used + 1
 
 

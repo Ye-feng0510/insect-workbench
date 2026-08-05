@@ -20,7 +20,7 @@ export default function LoginPage() {
     try {
       await login(username.trim(), password)
       const from = (location.state as { from?: string } | null)?.from
-      navigate(from && from !== '/login' ? from : '/workbench', { replace: true })
+      navigate(from && from !== '/login' ? from : '/agent-workbench', { replace: true })
     } catch (requestError) {
       setError(extractErrorMessage(requestError, '登录失败，请检查用户名和密码'))
     } finally {

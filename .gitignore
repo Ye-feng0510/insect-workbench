@@ -45,4 +45,5 @@ coverage/
 
 # 便携版构建产物
 .portable-build/
+.portable-updater-build/
 portable-dist/
