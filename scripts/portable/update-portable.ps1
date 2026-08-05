@@ -15,6 +15,7 @@ $manifestPath = Join-Path $updaterRoot "manifest.json"
 $payloadRoot = Join-Path $updaterRoot "payload"
 $inspectorPath = Join-Path $updaterRoot "inspect-portable-state.py"
 $expectedApp = "昆虫标本图片识别与Excel录入工作台"
+$expectedCapability = "agent_workflows_v1"
 $healthUrl = "http://127.0.0.1:8000/api/health"
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 $journalPath = $null
@@ -24,6 +25,7 @@ $backupRoot = $null
 $failedRoot = $null
 $oldMoved = $false
 $newInstalled = $false
+$validationLauncher = $null
 $startedLauncher = $null
 $lockHandle = $null
 
@@ -128,6 +130,106 @@ function Assert-RegularTree([string]$Root, [string]$Description) {
     }
 }
 
+function Copy-RegularTreeLongPath(
+    [string]$Python,
+    [string]$Source,
+    [string]$Destination
+) {
+    $copyScript = @'
+import os
+import shutil
+import stat
+import sys
+
+reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+
+def extended_path(path):
+    absolute = os.path.abspath(path)
+    if os.name != "nt" or absolute.startswith("\\\\?\\"):
+        return absolute
+    if absolute.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + absolute[2:]
+    return "\\\\?\\" + absolute
+
+source = extended_path(sys.argv[1])
+destination = extended_path(sys.argv[2])
+
+def checked_stat(path):
+    value = os.stat(path, follow_symlinks=False)
+    if stat.S_ISLNK(value.st_mode) or (
+        getattr(value, "st_file_attributes", 0) & reparse_flag
+    ):
+        raise RuntimeError("refusing to copy reparse point: " + path)
+    return value
+
+def copy_file(source_file, destination_file):
+    value = checked_stat(source_file)
+    if not stat.S_ISREG(value.st_mode):
+        raise RuntimeError("refusing to copy non-regular file: " + source_file)
+    if os.path.lexists(destination_file):
+        raise RuntimeError("destination already exists: " + destination_file)
+    shutil.copyfile(source_file, destination_file, follow_symlinks=False)
+    shutil.copystat(
+        source_file,
+        destination_file,
+        follow_symlinks=False,
+    )
+
+def copy_tree(source_directory, destination_directory):
+    value = checked_stat(source_directory)
+    if not stat.S_ISDIR(value.st_mode):
+        raise RuntimeError("source is not a directory: " + source_directory)
+    if os.path.lexists(destination_directory):
+        raise RuntimeError("destination already exists: " + destination_directory)
+    os.mkdir(destination_directory)
+    with os.scandir(source_directory) as entries:
+        for entry in entries:
+            source_path = entry.path
+            destination_path = os.path.join(destination_directory, entry.name)
+            entry_stat = checked_stat(source_path)
+            if stat.S_ISDIR(entry_stat.st_mode):
+                copy_tree(source_path, destination_path)
+            elif stat.S_ISREG(entry_stat.st_mode):
+                copy_file(source_path, destination_path)
+            else:
+                raise RuntimeError(
+                    "refusing to copy non-regular entry: " + source_path
+                )
+    shutil.copystat(
+        source_directory,
+        destination_directory,
+        follow_symlinks=False,
+    )
+
+source_stat = checked_stat(source)
+if stat.S_ISDIR(source_stat.st_mode):
+    copy_tree(source, destination)
+elif stat.S_ISREG(source_stat.st_mode):
+    copy_file(source, destination)
+else:
+    raise RuntimeError("source is not a regular file or directory: " + source)
+'@
+    $temporaryScript = [IO.Path]::GetTempFileName()
+    try {
+        [IO.File]::WriteAllText(
+            $temporaryScript,
+            $copyScript,
+            (New-Object Text.UTF8Encoding($false))
+        )
+        & $Python -I -B $temporaryScript $Source $Destination
+        if ($LASTEXITCODE -ne 0) {
+            throw (
+                "Long-path-safe staging copy failed from '$Source' to " +
+                "'$Destination' (exit code $LASTEXITCODE)."
+            )
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $temporaryScript -Force `
+            -ErrorAction SilentlyContinue
+    }
+}
+
 function Get-RelativeSlashPath([string]$Root, [string]$Path) {
     $rootWithSlash = (Get-FullPath $Root) + [IO.Path]::DirectorySeparatorChar
     $rootUri = New-Object Uri($rootWithSlash)
@@ -188,9 +290,23 @@ function Invoke-Inspector([string]$Root, [string]$Output) {
         ConvertFrom-Json
 }
 
-function Get-PortListener {
-    return Get-NetTCPConnection -LocalPort 8000 -State Listen `
+function Get-PortListener([int]$Port = 8000) {
+    return Get-NetTCPConnection -LocalPort $Port -State Listen `
         -ErrorAction SilentlyContinue | Select-Object -First 1
+}
+
+function Get-AvailableLoopbackPort {
+    $listener = New-Object Net.Sockets.TcpListener(
+        [Net.IPAddress]::Loopback,
+        0
+    )
+    try {
+        $listener.Start()
+        return [int]$listener.LocalEndpoint.Port
+    }
+    finally {
+        $listener.Stop()
+    }
 }
 
 function Get-ProcessExecutable([int]$ProcessId) {
@@ -202,8 +318,12 @@ function Get-ProcessExecutable([int]$ProcessId) {
     return Get-FullPath ([string]$process.ExecutablePath)
 }
 
-function Stop-OwnedListener([string]$Root, [switch]$Required) {
-    $listener = Get-PortListener
+function Stop-OwnedListener(
+    [string]$Root,
+    [switch]$Required,
+    [int]$Port = 8000
+) {
+    $listener = Get-PortListener $Port
     if (-not $listener) {
         return
     }
@@ -211,11 +331,20 @@ function Stop-OwnedListener([string]$Root, [switch]$Required) {
     $actualExecutable = Get-ProcessExecutable $listener.OwningProcess
     if (-not $actualExecutable -or -not (Test-SamePath $actualExecutable $expectedPython)) {
         if ($Required) {
-            throw "Port 8000 is owned by another executable; update aborted without changing files."
+            $ownerPath = if ($actualExecutable) {
+                $actualExecutable
+            }
+            else {
+                "<unavailable>"
+            }
+            throw (
+                "Port 8000 is owned by another executable ($ownerPath, " +
+                "PID $($listener.OwningProcess)); update aborted without changing files."
+            )
         }
         return
     }
-    Write-Log "Stopping portable application process $($listener.OwningProcess)..."
+    Write-Log "Stopping portable application process $($listener.OwningProcess) on port $Port..."
     Stop-Process -Id $listener.OwningProcess -ErrorAction Stop
     try {
         Wait-Process -Id $listener.OwningProcess -Timeout 10 `
@@ -224,29 +353,108 @@ function Stop-OwnedListener([string]$Root, [switch]$Required) {
     catch {
     }
     for ($attempt = 0; $attempt -lt 40; $attempt++) {
-        if (-not (Get-PortListener)) {
+        if (-not (Get-PortListener $Port)) {
             return
         }
         Start-Sleep -Milliseconds 250
     }
-    throw "Portable application did not release port 8000."
+    throw "Portable application did not release port $Port."
 }
 
-function Stop-OwnedPortableProcesses([string]$Root) {
+function Start-UpdatedBackend(
+    [string]$Python,
+    [string]$Backend,
+    [int]$Port,
+    [switch]$SuppressBrowser
+) {
+    $launchArguments = @(
+        "-I", "-B",
+        "-m", "uvicorn", "app.main:app",
+        "--host", "127.0.0.1", "--port", ([string]$Port),
+        "--app-dir", $Backend
+    ) | ForEach-Object {
+        ConvertTo-WindowsCommandLineArgument ([string]$_)
+    }
+    if ($SuppressBrowser) {
+        $env:INSECT_PORTABLE_NO_BROWSER = "1"
+    }
+    try {
+        return Start-Process -FilePath $Python `
+            -ArgumentList ([string]::Join(" ", [string[]]$launchArguments)) `
+            -WorkingDirectory $InstallRoot -PassThru `
+            -WindowStyle Hidden
+    }
+    finally {
+        if ($SuppressBrowser) {
+            Remove-Item Env:INSECT_PORTABLE_NO_BROWSER `
+                -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Assert-OwnedBackendProcess(
+    $Process,
+    [string]$Root,
+    [int]$Port,
+    [switch]$RequireListener
+) {
+    if (-not $Process) {
+        throw "Updated backend process handle is unavailable."
+    }
+    $Process.Refresh()
+    if ($Process.HasExited) {
+        throw "Updated backend PID $($Process.Id) exited unexpectedly."
+    }
     $expectedPython = Join-Path $Root "runtime\python\python.exe"
-    $processes = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue
-    foreach ($process in @($processes)) {
-        if (-not $process.ExecutablePath) {
-            continue
+    $actualExecutable = Get-ProcessExecutable $Process.Id
+    if (
+        -not $actualExecutable -or
+        -not (Test-SamePath $actualExecutable $expectedPython)
+    ) {
+        throw (
+            "PID $($Process.Id) is not owned by the updated portable runtime."
+        )
+    }
+    $listener = Get-PortListener $Port
+    if ($listener -and $listener.OwningProcess -ne $Process.Id) {
+        throw (
+            "Port $Port is owned by PID $($listener.OwningProcess), not " +
+            "updated backend PID $($Process.Id)."
+        )
+    }
+    if ($RequireListener -and -not $listener) {
+        throw "Updated backend PID $($Process.Id) is not listening on port $Port."
+    }
+}
+
+function Stop-OwnedBackendProcess(
+    $Process,
+    [string]$Root,
+    [int]$Port
+) {
+    if (-not $Process) {
+        return
+    }
+    $Process.Refresh()
+    if ($Process.HasExited) {
+        return
+    }
+
+    Assert-OwnedBackendProcess $Process $Root $Port
+    $processId = $Process.Id
+    Stop-Process -Id $processId -Force -ErrorAction Stop
+    try {
+        Wait-Process -Id $processId -Timeout 10 -ErrorAction Stop
+    }
+    catch {
+        $Process.Refresh()
+        if (-not $Process.HasExited) {
+            throw "Updated backend PID $processId did not exit."
         }
-        try {
-            if (Test-SamePath ([string]$process.ExecutablePath) $expectedPython) {
-                Stop-Process -Id $process.ProcessId -Force `
-                    -ErrorAction SilentlyContinue
-            }
-        }
-        catch {
-        }
+    }
+    $Process.Refresh()
+    if (-not $Process.HasExited) {
+        throw "Updated backend PID $processId did not exit."
     }
 }
 
@@ -302,7 +510,9 @@ function Assert-Payload($Manifest) {
         [string]$Manifest.arch -ne "windows-x64" -or
         [string]$Manifest.health.url -ne $healthUrl -or
         [string]$Manifest.health.app -ne $expectedApp -or
-        [string]$Manifest.health.status -ne "ok"
+        [string]$Manifest.health.status -ne "ok" -or
+        [string]$Manifest.health.version -ne [string]$Manifest.version -or
+        [string]$Manifest.health.capability -ne $expectedCapability
     ) {
         throw "Updater manifest metadata is invalid."
     }
@@ -443,15 +653,15 @@ function Assert-StateEquivalent(
     }
 }
 
-function Wait-AppHealth {
+function Wait-AppHealth([string]$Url) {
     $deadline = (Get-Date).AddSeconds($HealthTimeoutSeconds)
     while ((Get-Date) -lt $deadline) {
         try {
             $client = New-Object System.Net.WebClient
             $client.Encoding = [Text.Encoding]::UTF8
-            $json = $client.DownloadString($healthUrl)
+            $json = $client.DownloadString($Url)
             $response = $json | ConvertFrom-Json
-            if ($response.status -eq "ok" -and $response.app -eq $expectedApp) {
+            if (Test-AppHealthResponse $response $manifest.health) {
                 return
             }
         }
@@ -460,6 +670,48 @@ function Wait-AppHealth {
         Start-Sleep -Milliseconds 500
     }
     throw "Updated application did not pass the exact health check within $HealthTimeoutSeconds seconds."
+}
+
+function Test-AppHealthResponse($Response, $ExpectedHealth) {
+    $statusProperty = $Response.PSObject.Properties["status"]
+    $appProperty = $Response.PSObject.Properties["app"]
+    $versionProperty = $Response.PSObject.Properties["version"]
+    $capabilityProperty = $Response.PSObject.Properties["capability"]
+    $capabilitiesProperty = $Response.PSObject.Properties["capabilities"]
+    $hasCapability = (
+        (
+            $capabilityProperty -and
+            [string]$capabilityProperty.Value -eq
+                [string]$ExpectedHealth.capability
+        ) -or
+        (
+            $capabilitiesProperty -and
+            @($capabilitiesProperty.Value) -contains
+                [string]$ExpectedHealth.capability
+        )
+    )
+    return (
+        $statusProperty -and
+        [string]$statusProperty.Value -eq [string]$ExpectedHealth.status -and
+        $appProperty -and
+        [string]$appProperty.Value -eq [string]$ExpectedHealth.app -and
+        $versionProperty -and
+        [string]$versionProperty.Value -eq [string]$ExpectedHealth.version -and
+        $hasCapability
+    )
+}
+
+function Test-LiveAppHealth($ExpectedHealth) {
+    try {
+        $client = New-Object System.Net.WebClient
+        $client.Encoding = [Text.Encoding]::UTF8
+        $json = $client.DownloadString([string]$ExpectedHealth.url)
+        $response = $json | ConvertFrom-Json
+        return Test-AppHealthResponse $response $ExpectedHealth
+    }
+    catch {
+        return $false
+    }
 }
 
 try {
@@ -530,11 +782,26 @@ try {
             [string]$installedRelease.version -eq [string]$manifest.version -and
             [string]$installedRelease.arch -eq [string]$manifest.arch
         ) {
-            Write-Host "The portable application is already version $($manifest.version)." `
-                -ForegroundColor Green
-            $lockHandle.Dispose()
-            $lockHandle = $null
-            exit 0
+            $listener = Get-PortListener
+            $installedPython = Join-Path $InstallRoot "runtime\python\python.exe"
+            $listenerExecutable = if ($listener) {
+                Get-ProcessExecutable $listener.OwningProcess
+            }
+            else {
+                $null
+            }
+            if (
+                (Test-LiveAppHealth $manifest.health) -and
+                $listener -and
+                $listenerExecutable -and
+                (Test-SamePath $listenerExecutable $installedPython)
+            ) {
+                Write-Host "The portable application is already version $($manifest.version)." `
+                    -ForegroundColor Green
+                $lockHandle.Dispose()
+                $lockHandle = $null
+                exit 0
+            }
         }
     }
 
@@ -571,17 +838,16 @@ try {
     $envHash = (Get-FileHash -LiteralPath (Join-Path $InstallRoot ".env") -Algorithm SHA256).Hash
     $dataFingerprint = Get-DataFingerprint $InstallRoot
 
-    New-Item -ItemType Directory -Path $stageRoot | Out-Null
-    Get-ChildItem -LiteralPath $payloadRoot -Force |
-        ForEach-Object {
-            Copy-Item -LiteralPath $_.FullName -Destination $stageRoot `
-                -Recurse -Force
-        }
-    Copy-Item -LiteralPath (Join-Path $InstallRoot ".env") `
-        -Destination (Join-Path $stageRoot ".env") -Force
-    Copy-Item -LiteralPath (Join-Path $InstallRoot "data") `
-        -Destination $stageRoot -Recurse -Force
-    Assert-RegularTree $stageRoot "Staged application"
+    $trustedPython = Join-Path $payloadRoot "runtime\python\python.exe"
+    Copy-RegularTreeLongPath $trustedPython $payloadRoot $stageRoot
+    Copy-RegularTreeLongPath `
+        $trustedPython `
+        (Join-Path $InstallRoot ".env") `
+        (Join-Path $stageRoot ".env")
+    Copy-RegularTreeLongPath `
+        $trustedPython `
+        (Join-Path $InstallRoot "data") `
+        (Join-Path $stageRoot "data")
     if (
         $envHash -ne
         (Get-FileHash -LiteralPath (Join-Path $stageRoot ".env") -Algorithm SHA256).Hash
@@ -608,37 +874,14 @@ try {
 
     $embeddedPython = Join-Path $InstallRoot "runtime\python\python.exe"
     $embeddedBackend = Join-Path $InstallRoot "backend"
-    if ($NoBrowser) {
-        $env:INSECT_PORTABLE_NO_BROWSER = "1"
-    }
-    try {
-        $launchArguments = @(
-            "-I", "-B",
-            "-m", "uvicorn", "app.main:app",
-            "--host", "127.0.0.1", "--port", "8000",
-            "--app-dir", $embeddedBackend
-        ) | ForEach-Object {
-            ConvertTo-WindowsCommandLineArgument ([string]$_)
-        }
-        $startedLauncher = Start-Process -FilePath $embeddedPython `
-            -ArgumentList ([string]::Join(" ", [string[]]$launchArguments)) `
-            -WorkingDirectory $InstallRoot -PassThru `
-            -WindowStyle Hidden
-    }
-    finally {
-        if ($NoBrowser) {
-            Remove-Item Env:INSECT_PORTABLE_NO_BROWSER -ErrorAction SilentlyContinue
-        }
-    }
-    Wait-AppHealth
-    $listener = Get-PortListener
-    $newPython = Join-Path $InstallRoot "runtime\python\python.exe"
-    if (
-        -not $listener -or
-        -not (Test-SamePath (Get-ProcessExecutable $listener.OwningProcess) $newPython)
-    ) {
-        throw "Healthy service is not owned by the updated portable runtime."
-    }
+    $validationPort = Get-AvailableLoopbackPort
+    $validationHealthUrl = "http://127.0.0.1:$validationPort/api/health"
+    Write-Log "Starting updated backend validation on loopback port $validationPort..."
+    $validationLauncher = Start-UpdatedBackend `
+        $embeddedPython $embeddedBackend $validationPort -SuppressBrowser
+    Wait-AppHealth $validationHealthUrl
+    Assert-OwnedBackendProcess `
+        $validationLauncher $InstallRoot $validationPort -RequireListener
     $newState = Invoke-Inspector $InstallRoot $newStatePath
     Assert-StateEquivalent $oldState $newState `
         -MinimumSchemaVersion $PayloadSchemaVersion
@@ -650,6 +893,18 @@ try {
     }
     $newFingerprint = Get-DataFingerprint $InstallRoot
     Assert-FingerprintPreserved $dataFingerprint $newFingerprint
+    Stop-OwnedBackendProcess `
+        $validationLauncher $InstallRoot $validationPort
+    $validationLauncher = $null
+    Write-Journal "validated"
+
+    Stop-OwnedListener $InstallRoot -Required
+    Write-Log "Starting updated backend on production port 8000..."
+    $startedLauncher = Start-UpdatedBackend `
+        $embeddedPython $embeddedBackend 8000 -SuppressBrowser:$NoBrowser
+    Wait-AppHealth $healthUrl
+    Assert-OwnedBackendProcess `
+        $startedLauncher $InstallRoot 8000 -RequireListener
 
     Write-Journal "succeeded"
     Write-Log "Update succeeded. Live path: $InstallRoot" Green
@@ -675,12 +930,20 @@ catch {
     if ($oldMoved) {
         try {
             if ($newInstalled -and (Test-Path -LiteralPath $InstallRoot)) {
-                try { Stop-OwnedListener $InstallRoot } catch {}
-                if ($startedLauncher -and -not $startedLauncher.HasExited) {
-                    Stop-Process -Id $startedLauncher.Id -Force `
-                        -ErrorAction SilentlyContinue
+                if ($validationLauncher) {
+                    try {
+                        Stop-OwnedBackendProcess `
+                            $validationLauncher $InstallRoot $validationPort
+                    }
+                    catch {}
                 }
-                Stop-OwnedPortableProcesses $InstallRoot
+                if ($startedLauncher) {
+                    try {
+                        Stop-OwnedBackendProcess `
+                            $startedLauncher $InstallRoot 8000
+                    }
+                    catch {}
+                }
                 Start-Sleep -Milliseconds 500
                 Move-WithRetry $InstallRoot $failedRoot
             }

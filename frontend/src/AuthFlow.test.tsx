@@ -14,7 +14,14 @@ import {
 } from '@/services/adminUsers'
 import { getModelConfig } from '@/services/settings'
 import { setCsrfToken } from '@/services/api'
+import { checkBackendCompatibility } from '@/services/version'
 import type { AuthUser } from '@/types'
+
+vi.mock('@/services/version', () => ({
+  EXPECTED_BACKEND_VERSION: 'v1.2.1',
+  REQUIRED_BACKEND_CAPABILITY: 'agent_workflows_v1',
+  checkBackendCompatibility: vi.fn(),
+}))
 
 vi.mock('@/services/auth', () => ({
   getCurrentUser: vi.fn(),
@@ -91,6 +98,11 @@ function renderApp(path: string) {
 describe('frontend authentication and RBAC', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.mocked(checkBackendCompatibility).mockResolvedValue({
+      compatible: true,
+      version: 'v1.2.1',
+      capabilities: ['agent_workflows_v1'],
+    })
     workbenchMounted.mockClear()
     sessionStorage.clear()
     vi.mocked(logout).mockResolvedValue()

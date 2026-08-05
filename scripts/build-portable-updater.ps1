@@ -186,6 +186,8 @@ $manifest = [ordered]@{
         url = "http://127.0.0.1:8000/api/health"
         app = "昆虫标本图片识别与Excel录入工作台"
         status = "ok"
+        version = [string]$release.version
+        capability = "agent_workflows_v1"
     }
     mutable_paths = @(".env", "data")
     files = $manifestFiles
