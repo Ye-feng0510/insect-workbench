@@ -133,5 +133,6 @@ describe('WorkbenchPage material preview', () => {
     expect(
       await screen.findByRole('img', { name: '131.jpg' }),
     ).toBeInTheDocument()
+    expect(screen.queryByText('分类信息将在确认图片信息后自动生成')).not.toBeInTheDocument()
   })
 })

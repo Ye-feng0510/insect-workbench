@@ -244,9 +244,9 @@ async def confirm_extraction(
             ),
         )
 
-    # 执行确认+分类+入表
+    # 经典工作台确认识别结果并入表,分类仅使用已有缓存
     material_item = materials_service.get_linked_item(db, record_id)
-    result = await svc.confirm_and_classify(
+    result = await svc.confirm_classic_without_taxonomy(
         db,
         record,
         req.confirmed,

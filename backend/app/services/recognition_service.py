@@ -560,6 +560,87 @@ async def confirm_and_classify(
     )
 
 
+async def confirm_classic_without_taxonomy(
+    db: Session,
+    record: SpecimenRecord,
+    confirmed: dict[str, str],
+    duplicate_action: str | None = None,
+    existing_record: SpecimenRecord | None = None,
+    material_item: MaterialItem | None = None,
+) -> SpecimenRecord:
+    """确认经典工作台识别结果,仅使用已有分类缓存。"""
+    field_warnings = validate_confirmed_fields(confirmed)
+    if existing_record is not None and duplicate_action != "replace":
+        raise HTTPException(status_code=409, detail="图像编号已存在")
+
+    cached_taxonomy = _query_taxonomy_cache(
+        db, record.owner_id, confirmed["中名"].strip()
+    )
+    taxonomy = cached_taxonomy
+    taxonomy_source = existing_record or (
+        record if record.status == STATUS_COMPLETED else None
+    )
+    if taxonomy is None and taxonomy_source is not None:
+        taxonomy = {
+            field: str(getattr(taxonomy_source, FIELD_TO_COLUMN[field], "") or "")
+            .strip()
+            for field in TAXONOMY_FIELDS
+        }
+    taxonomy = taxonomy or {}
+
+    record.confirmed_extraction_json = json.dumps(
+        {"confirmed": confirmed}, ensure_ascii=False
+    )
+    for field in IMAGE_EXTRACTED_FIELDS:
+        if field in confirmed:
+            setattr(record, FIELD_TO_COLUMN[field], str(confirmed[field]).strip())
+    for field in MANUAL_OPTIONAL_FIELDS:
+        setattr(
+            record,
+            FIELD_TO_COLUMN[field],
+            str(confirmed.get(field, "")).strip(),
+        )
+    for field in TAXONOMY_FIELDS:
+        if field in taxonomy:
+            setattr(record, FIELD_TO_COLUMN[field], str(taxonomy[field]).strip())
+    record.taxonomy_result_json = json.dumps(taxonomy, ensure_ascii=False)
+    record.warnings_json = json.dumps(field_warnings, ensure_ascii=False)
+
+    result = record
+    if existing_record is not None:
+        for field in (
+            IMAGE_EXTRACTED_FIELDS + TAXONOMY_FIELDS + MANUAL_OPTIONAL_FIELDS
+        ):
+            column = FIELD_TO_COLUMN[field]
+            setattr(existing_record, column, getattr(record, column))
+        for attr in (
+            "confirmed_extraction_json",
+            "taxonomy_result_json",
+            "warnings_json",
+            "scientific_name",
+            "scientific_name_authorship",
+            "subfamily",
+            "tribe",
+            "subgenus",
+            "taxonomy_verification_json",
+        ):
+            setattr(existing_record, attr, getattr(record, attr))
+        existing_record.status = STATUS_COMPLETED
+        record.status = "discarded"
+        result = existing_record
+    else:
+        record.status = STATUS_COMPLETED
+
+    if material_item is not None:
+        material_item.record_id = result.id
+        material_item.status = MATERIAL_STATUS_COMPLETED
+        material_item.error_message = ""
+    quota_service.charge(db, record.id)
+    db.commit()
+    db.refresh(result)
+    return result
+
+
 def commit_confirmed_taxonomy(
     db: Session,
     record: SpecimenRecord,

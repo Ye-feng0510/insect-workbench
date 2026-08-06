@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.auth import AuthContext, get_auth_context
 from app.field_mapping import FIELD_TO_COLUMN, TAXONOMY_FIELDS, IMAGE_EXTRACTED_FIELDS
-from app.models import SpecimenRecord, STATUS_COMPLETED
+from app.models import SpecimenRecord, WorkflowSession, STATUS_COMPLETED
 from app.schemas import RecordDetail, RecordSummary, RecordUpdate
 from app.services import recognition_service as svc
 from app.services import materials_service
@@ -228,14 +228,33 @@ async def reclassify_record(
 
     confirmed = confirmed_data["confirmed"]
     material_item = materials_service.get_linked_item(db, record_id)
-    result = await svc.confirm_and_classify(
-        db,
-        record,
-        confirmed,
-        duplicate_action="replace",
-        existing_record=None,
-        material_item=material_item,
+    has_agent_workflow = (
+        db.query(WorkflowSession.id)
+        .filter(
+            WorkflowSession.record_id == record.id,
+            WorkflowSession.owner_id == ctx.owner_id,
+        )
+        .first()
+        is not None
     )
+    if has_agent_workflow:
+        result = await svc.confirm_and_classify(
+            db,
+            record,
+            confirmed,
+            duplicate_action="replace",
+            existing_record=None,
+            material_item=material_item,
+        )
+    else:
+        result = await svc.confirm_classic_without_taxonomy(
+            db,
+            record,
+            confirmed,
+            duplicate_action="replace",
+            existing_record=None,
+            material_item=material_item,
+        )
 
     # 计算 Excel 行号
     from app.models import ExcelTemplate

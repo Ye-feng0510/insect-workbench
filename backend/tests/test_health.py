@@ -16,6 +16,6 @@ def test_health() -> None:
         "version": APP_VERSION,
         "capabilities": list(APP_CAPABILITIES),
     }
-    assert APP_VERSION == "v1.2.1"
+    assert APP_VERSION == "v1.2.2"
     assert "agent_workflows_v1" in APP_CAPABILITIES
     assert app.version == APP_VERSION

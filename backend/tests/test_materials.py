@@ -280,7 +280,11 @@ def test_queue_skip_complete_and_record_delete(materials_client, monkeypatch):
         fake_extract,
     )
     from app.routers import recognition as recognition_router
-    monkeypatch.setattr(recognition_router.svc, "confirm_and_classify", fake_confirm)
+    monkeypatch.setattr(
+        recognition_router.svc,
+        "confirm_classic_without_taxonomy",
+        fake_confirm,
+    )
 
     assert upload_zip(
         client,
@@ -478,6 +482,97 @@ def test_duplicate_replace_keeps_material_link(materials_client, monkeypatch):
         MATERIAL_STATUS_PENDING,
     ]
     assert all(item.record_id is None for item in linked_items)
+    db.close()
+
+
+def test_classic_confirmation_skips_taxonomy_model_on_cache_miss(
+    materials_client, monkeypatch
+):
+    client, TestSession = materials_client
+
+    async def fake_extract(
+        db,
+        image_path,
+        image_filename,
+        rotation_degrees=0,
+        record=None,
+    ):
+        record.status = STATUS_AWAITING_CONFIRMATION
+        record.extracted_draft_json = json.dumps(
+            {
+                "extracted": {
+                    "中名": "识别结果",
+                    "产地3": "",
+                    "图像": "EXTRACTED-1",
+                    "采集人": "",
+                    "采集日期": "",
+                },
+                "confidence": {},
+                "evidence": {},
+                "warnings": [],
+            },
+            ensure_ascii=False,
+        )
+        db.commit()
+        db.refresh(record)
+        return record
+
+    async def fail_taxonomy_model(*args, **kwargs):
+        raise AssertionError("classic confirmation must not call taxonomy model")
+
+    monkeypatch.setattr(
+        materials_service.recognition_service,
+        "extract_image_info",
+        fake_extract,
+    )
+    monkeypatch.setattr(
+        materials_service.recognition_service,
+        "_call_taxonomy_model",
+        fail_taxonomy_model,
+    )
+    monkeypatch.setattr(
+        materials_service.recognition_service,
+        "_call_taxonomy_model_with_errors",
+        fail_taxonomy_model,
+    )
+
+    assert upload_zip(client, {"no-cache.jpg": image_bytes()}).status_code == 200
+    extracted = client.post("/api/materials/next-extract")
+    assert extracted.status_code == 200
+    data = extracted.json()
+
+    response = client.post(
+        f"/api/recognition/{data['record_id']}/confirm-extraction",
+        json={
+            "confirmed": {
+                **data["extracted"],
+                "中名": "没有分类缓存",
+                "图像": "NO-TAXONOMY-MODEL",
+            }
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == STATUS_COMPLETED
+    assert all(
+        payload["fields"][field] == ""
+        for field in (
+            "Phylum",
+            "纲",
+            "Class",
+            "Order",
+            "中文科名",
+            "科名",
+            "属名",
+            "种名",
+        )
+    )
+
+    db = TestSession()
+    record = db.get(SpecimenRecord, data["record_id"])
+    assert record.status == STATUS_COMPLETED
+    assert json.loads(record.taxonomy_result_json) == {}
+    assert db.query(TaxonomyCache).count() == 0
     db.close()
 
 

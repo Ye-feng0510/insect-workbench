@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import {
   Upload, ZoomIn, ZoomOut, RotateCw, RotateCcw, Loader2,
-  CheckCircle, AlertCircle, RefreshCw, Trash2, Lock, Image as ImageIcon,
+  CheckCircle, AlertCircle, RefreshCw, Trash2, Image as ImageIcon,
   ListStart, SkipForward,
 } from 'lucide-react'
 import { useToast } from '@/components/Toast'
@@ -263,9 +263,6 @@ export default function WorkbenchPage() {
       setImageError('')
       setZoom(1)
       setRotation(selectedRotation)
-      getMaterialSummary()
-        .then(setMaterialSummary)
-        .catch(() => undefined)
       show('素材图片识别完成,请核查确认', 'success')
     } catch (e) {
       if (!mountedRef.current) return
@@ -273,6 +270,10 @@ export default function WorkbenchPage() {
       if (status === 429) {
         setMaterialSummary(await getMaterialSummary().catch(() => materialSummary))
         show('工作流配额已用尽,当前素材和图片已保留', 'error')
+      } else if (status === 404) {
+        clearWorkbench()
+        setMaterialSummary(await getMaterialSummary().catch(() => materialSummary))
+        show('当前素材包已处理完毕', 'success')
       } else {
         show(extractErrorMessage(e, '加载下一张素材失败'), 'error')
         await loadDraft()
@@ -331,22 +332,9 @@ export default function WorkbenchPage() {
       return
     }
 
-    try {
-      const summary = await getMaterialSummary()
-      if (!mountedRef.current) return
-      setMaterialSummary(summary)
-      clearWorkbench()
-      setHighlightRow(excelRow)
-      if (summary.pending_count > 0) {
-        await startNextMaterial()
-      } else {
-        show('当前素材包已处理完毕', 'success')
-      }
-    } catch {
-      clearWorkbench()
-      setHighlightRow(excelRow)
-      show('记录已完成,但素材进度刷新失败', 'error')
-    }
+    clearWorkbench()
+    void getMaterialSummary().then(setMaterialSummary).catch(() => undefined)
+    await startNextMaterial()
   }
 
   const handleConfirm = async () => {
@@ -370,9 +358,6 @@ export default function WorkbenchPage() {
           result.excel_row,
           `已写入 Excel 第 ${result.excel_row} 行`,
         )
-      } else if (result.status === STATUS.CLASSIFICATION_FAILED) {
-        show('分类校验失败,可在记录管理中重试分类', 'error')
-        setDraft(prev => prev ? { ...prev, status: result.status } : null)
       }
     } catch (e: unknown) {
       // 检查是否 409 重复编号
@@ -867,9 +852,9 @@ export default function WorkbenchPage() {
                     className="flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {confirming ? (
-                      <><Loader2 className="h-4 w-4 animate-spin" /> 正在整理分类信息...</>
+                      <><Loader2 className="h-4 w-4 animate-spin" /> 正在保存识别结果...</>
                     ) : (
-                      <><CheckCircle className="h-4 w-4" /> 确认信息并自动入表</>
+                      <><CheckCircle className="h-4 w-4" /> 确认识别并入表</>
                     )}
                   </button>
                 )}
@@ -879,14 +864,6 @@ export default function WorkbenchPage() {
                   <div className="flex items-center gap-2 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
                     <CheckCircle className="h-4 w-4" />
                     已写入 Excel 第 <strong>{highlightRow}</strong> 行
-                  </div>
-                )}
-
-                {/* 分类失败提示 */}
-                {draft.status === STATUS.CLASSIFICATION_FAILED && (
-                  <div className="flex items-center gap-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
-                    <AlertCircle className="h-4 w-4" />
-                    分类校验失败,可在"记录管理"中重新分类
                   </div>
                 )}
 
@@ -901,24 +878,6 @@ export default function WorkbenchPage() {
             )}
           </div>
 
-          {/* 卡片2:分类信息(锁定) */}
-          <div className="rounded-xl border border-gray-200 bg-white p-4 opacity-60">
-            <div className="mb-3 flex items-center gap-2">
-              <Lock className="h-4 w-4 text-gray-400" />
-              <h3 className="text-sm font-semibold text-gray-700">分类信息</h3>
-              {!draft || draft.status !== STATUS.COMPLETED ? (
-                <span className="text-xs text-gray-400">
-                  {!draft ? '请先上传图片' :
-                   draft.status === STATUS.AWAITING_CONFIRMATION ? '请先确认图片信息' :
-                   draft.status === STATUS.CLASSIFYING ? '正在整理...' :
-                   '待分类完成后显示'}
-                </span>
-              ) : null}
-            </div>
-            <p className="text-center text-xs text-gray-400">
-              分类信息将在确认图片信息后自动生成
-            </p>
-          </div>
         </div>
       </div>
 
