@@ -23,9 +23,11 @@ import {
   ZoomIn,
   ZoomOut,
 } from 'lucide-react'
-import type { ReactNode } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import AuthenticatedImage from '@/components/AuthenticatedImage'
 import ExcelPreview from '@/components/ExcelPreview'
+import PanelResizeHandle from './PanelResizeHandle'
+import { useAgentPanelLayoutContext } from './panel-layout'
 import {
   CONFIDENCE_COLORS,
   CONFIDENCE_LABELS,
@@ -971,11 +973,14 @@ function WorkbenchInspector(props: AgentWorkbenchViewProps) {
           className="fixed inset-0 z-30 bg-slate-950/35 backdrop-blur-sm xl:hidden"
         />
       ) : null}
-      <aside className={`${props.inspectorOpen ? 'flex' : 'hidden'} fixed inset-y-0 right-0 z-40 w-[min(94vw,430px)] flex-col border-l border-slate-200 bg-white shadow-2xl xl:static xl:z-auto xl:flex xl:w-[400px] xl:shrink-0 xl:shadow-none`}>
+      <aside
+        id="agent-inspector-panel"
+        className={`${props.inspectorOpen ? 'flex' : 'hidden'} fixed inset-y-0 right-0 z-40 w-[min(94vw,430px)] flex-col border-l border-slate-200 bg-white shadow-2xl xl:static xl:z-auto xl:flex xl:w-[var(--agent-inspector-width)] xl:shrink-0 xl:shadow-none`}
+      >
         <header className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-          <div>
+          <div className="min-w-0 flex-1">
             <h2 className="text-sm font-semibold text-slate-800">标本预览信息</h2>
-            <p className="mt-0.5 max-w-[290px] truncate text-xs text-slate-400">{props.displayedImageName}</p>
+            <p className="mt-0.5 truncate text-xs text-slate-400">{props.displayedImageName}</p>
           </div>
           <button type="button" aria-label="关闭预览信息" onClick={() => props.onInspectorOpenChange(false)} className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 xl:hidden"><X className="h-4 w-4" /></button>
         </header>
@@ -994,8 +999,14 @@ function WorkbenchInspector(props: AgentWorkbenchViewProps) {
 
 export default function AgentWorkbenchView(props: AgentWorkbenchViewProps) {
   const hasDraft = Boolean(props.draft)
+  const panelLayout = useAgentPanelLayoutContext()
   return (
-    <div className="flex h-screen min-w-0 overflow-hidden bg-[#f6f8f7]">
+    <div
+      className="flex h-screen min-w-0 overflow-hidden bg-[#f6f8f7]"
+      style={{
+        '--agent-inspector-width': `${panelLayout.rightWidth}px`,
+      } as CSSProperties}
+    >
       <section className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-[65px] shrink-0 items-center justify-between gap-4 border-b border-slate-200 bg-white px-5">
           <div className="min-w-0">
@@ -1125,6 +1136,15 @@ export default function AgentWorkbenchView(props: AgentWorkbenchViewProps) {
         </footer>
       </section>
 
+      <PanelResizeHandle
+        side="right"
+        currentWidth={panelLayout.rightWidth}
+        maxWidth={panelLayout.rightMax}
+        active={panelLayout.draggingSide === 'right'}
+        onPointerDown={(event) => panelLayout.startResize('right', event)}
+        onWidthChange={(width) => panelLayout.setSideWidth('right', width)}
+        onReset={panelLayout.reset}
+      />
       <WorkbenchInspector {...props} />
     </div>
   )

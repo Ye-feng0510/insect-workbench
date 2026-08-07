@@ -15,6 +15,12 @@ import {
 import { getModelConfig } from '@/services/settings'
 import { getCurrentTemplate } from '@/services/templates'
 import { useAuth } from '@/contexts/auth'
+import PanelResizeHandle from '@/features/workbench/PanelResizeHandle'
+import {
+  AgentPanelLayoutContext,
+  isAgentWorkbenchPath,
+  useAgentPanelLayout,
+} from '@/features/workbench/panel-layout'
 
 const businessNavItems = [
   { to: '/agent-workbench', label: '智能体工作台', icon: MessageSquare },
@@ -48,6 +54,8 @@ export interface LayoutOutletContext {
 
 export default function Layout() {
   const location = useLocation()
+  const isAgentWorkbench = isAgentWorkbenchPath(location.pathname)
+  const agentPanelLayout = useAgentPanelLayout()
   const {
     user,
     adminUsers,
@@ -94,8 +102,18 @@ export default function Layout() {
     : businessNavItems
 
   return (
-    <div className="flex h-screen bg-gray-50 text-gray-800">
-      <aside className="flex w-60 shrink-0 flex-col border-r border-gray-200 bg-white">
+    <AgentPanelLayoutContext.Provider value={agentPanelLayout}>
+    <div
+      ref={agentPanelLayout.containerRef}
+      className="flex h-screen bg-gray-50 text-gray-800"
+    >
+      <aside
+        id="agent-navigation-panel"
+        style={isAgentWorkbench ? { width: agentPanelLayout.leftWidth } : undefined}
+        className={`flex shrink-0 flex-col border-r border-gray-200 bg-white ${
+          isAgentWorkbench ? '' : 'w-60'
+        }`}
+      >
         <div className="flex items-center gap-2 border-b border-gray-200 px-5 py-4">
           <Microscope className="h-6 w-6 text-emerald-600" />
           <span className="text-base font-semibold">昆虫标本工作台</span>
@@ -186,8 +204,19 @@ export default function Layout() {
           </div>
         </div>
       </aside>
+      {isAgentWorkbench ? (
+        <PanelResizeHandle
+          side="left"
+          currentWidth={agentPanelLayout.leftWidth}
+          maxWidth={agentPanelLayout.leftMax}
+          active={agentPanelLayout.draggingSide === 'left'}
+          onPointerDown={(event) => agentPanelLayout.startResize('left', event)}
+          onWidthChange={(width) => agentPanelLayout.setSideWidth('left', width)}
+          onReset={agentPanelLayout.reset}
+        />
+      ) : null}
       <main className={
-        location.pathname === '/agent-workbench'
+        isAgentWorkbench
           ? 'min-w-0 flex-1 overflow-hidden'
           : 'min-w-0 flex-1 overflow-auto p-6'
       }>
@@ -197,5 +226,6 @@ export default function Layout() {
         />
       </main>
     </div>
+    </AgentPanelLayoutContext.Provider>
   )
 }
