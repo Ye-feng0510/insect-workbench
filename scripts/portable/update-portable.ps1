@@ -14,6 +14,8 @@ $updaterRoot = $PSScriptRoot
 $manifestPath = Join-Path $updaterRoot "manifest.json"
 $payloadRoot = Join-Path $updaterRoot "payload"
 $inspectorPath = Join-Path $updaterRoot "inspect-portable-state.py"
+$healthContractPath = Join-Path $updaterRoot "portable-health.ps1"
+$expectedProduct = "insect-specimen-workbench"
 $expectedApp = "昆虫标本图片识别与Excel录入工作台"
 $expectedCapability = "agent_workflows_v1"
 $healthUrl = "http://127.0.0.1:8000/api/health"
@@ -28,6 +30,11 @@ $newInstalled = $false
 $validationLauncher = $null
 $startedLauncher = $null
 $lockHandle = $null
+
+if (-not (Test-Path -LiteralPath $healthContractPath -PathType Leaf)) {
+    throw "Portable health contract is missing."
+}
+. $healthContractPath
 
 function Get-FullPath([string]$Path) {
     return [IO.Path]::GetFullPath($Path).TrimEnd(
@@ -509,6 +516,7 @@ function Assert-Payload($Manifest) {
         [string]$Manifest.product -ne "insect-specimen-workbench" -or
         [string]$Manifest.arch -ne "windows-x64" -or
         [string]$Manifest.health.url -ne $healthUrl -or
+        [string]$Manifest.health.product -ne $expectedProduct -or
         [string]$Manifest.health.app -ne $expectedApp -or
         [string]$Manifest.health.status -ne "ok" -or
         [string]$Manifest.health.version -ne [string]$Manifest.version -or
@@ -543,7 +551,8 @@ function Assert-Payload($Manifest) {
         "runtime\python\python.exe",
         "backend\app\main.py",
         "frontend\dist\index.html",
-        "start-portable.ps1"
+        "start-portable.ps1",
+        "portable-health.ps1"
     )
     foreach ($relative in $required) {
         if (-not (Test-Path -LiteralPath (Join-Path $payloadRoot $relative) -PathType Leaf)) {
@@ -655,63 +664,77 @@ function Assert-StateEquivalent(
 
 function Wait-AppHealth([string]$Url) {
     $deadline = (Get-Date).AddSeconds($HealthTimeoutSeconds)
+    $lastFailure = "no health response"
     while ((Get-Date) -lt $deadline) {
         try {
-            $client = New-Object System.Net.WebClient
-            $client.Encoding = [Text.Encoding]::UTF8
-            $json = $client.DownloadString($Url)
-            $response = $json | ConvertFrom-Json
+            $response = Get-PortableHealthResponse $Url
             if (Test-AppHealthResponse $response $manifest.health) {
                 return
             }
+            $lastFailure = [string]::Join(
+                ", ",
+                [string[]]@(
+                    Get-PortableHealthFailures $response $manifest.health
+                )
+            )
         }
         catch {
+            $lastFailure = $_.Exception.Message
         }
         Start-Sleep -Milliseconds 500
     }
-    throw "Updated application did not pass the exact health check within $HealthTimeoutSeconds seconds."
+    throw (
+        "Updated application did not pass the exact health check within " +
+        "$HealthTimeoutSeconds seconds. Last failure: $lastFailure"
+    )
 }
 
 function Test-AppHealthResponse($Response, $ExpectedHealth) {
-    $statusProperty = $Response.PSObject.Properties["status"]
-    $appProperty = $Response.PSObject.Properties["app"]
-    $versionProperty = $Response.PSObject.Properties["version"]
-    $capabilityProperty = $Response.PSObject.Properties["capability"]
-    $capabilitiesProperty = $Response.PSObject.Properties["capabilities"]
-    $hasCapability = (
-        (
-            $capabilityProperty -and
-            [string]$capabilityProperty.Value -eq
-                [string]$ExpectedHealth.capability
-        ) -or
-        (
-            $capabilitiesProperty -and
-            @($capabilitiesProperty.Value) -contains
-                [string]$ExpectedHealth.capability
-        )
-    )
-    return (
-        $statusProperty -and
-        [string]$statusProperty.Value -eq [string]$ExpectedHealth.status -and
-        $appProperty -and
-        [string]$appProperty.Value -eq [string]$ExpectedHealth.app -and
-        $versionProperty -and
-        [string]$versionProperty.Value -eq [string]$ExpectedHealth.version -and
-        $hasCapability
-    )
+    return Test-PortableHealthResponse $Response $ExpectedHealth
 }
 
 function Test-LiveAppHealth($ExpectedHealth) {
     try {
-        $client = New-Object System.Net.WebClient
-        $client.Encoding = [Text.Encoding]::UTF8
-        $json = $client.DownloadString([string]$ExpectedHealth.url)
-        $response = $json | ConvertFrom-Json
+        $response = Get-PortableHealthResponse ([string]$ExpectedHealth.url)
         return Test-AppHealthResponse $response $ExpectedHealth
     }
     catch {
         return $false
     }
+}
+
+function Test-InstalledPayloadFile(
+    $Manifest,
+    [string]$Root,
+    [string]$RelativePath
+) {
+    $entries = @(
+        $Manifest.files |
+            Where-Object {
+                [string]::Equals(
+                    [string]$_.path,
+                    $RelativePath,
+                    [StringComparison]::OrdinalIgnoreCase
+                )
+            }
+    )
+    if ($entries.Count -ne 1) {
+        return $false
+    }
+    $file = Join-Path $Root $RelativePath
+    if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
+        return $false
+    }
+    $item = Get-Item -LiteralPath $file
+    if ([Int64]$item.Length -ne [Int64]$entries[0].size) {
+        return $false
+    }
+    $hash = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash
+    return [string]::Equals(
+        $hash,
+        [string]$entries[0].sha256,
+        [StringComparison]::OrdinalIgnoreCase
+    )
 }
 
 try {
@@ -794,7 +817,9 @@ try {
                 (Test-LiveAppHealth $manifest.health) -and
                 $listener -and
                 $listenerExecutable -and
-                (Test-SamePath $listenerExecutable $installedPython)
+                (Test-SamePath $listenerExecutable $installedPython) -and
+                (Test-InstalledPayloadFile `
+                    $manifest $InstallRoot "portable-health.ps1")
             ) {
                 Write-Host "The portable application is already version $($manifest.version)." `
                     -ForegroundColor Green

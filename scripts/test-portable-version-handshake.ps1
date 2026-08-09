@@ -4,6 +4,7 @@ Set-StrictMode -Version 2.0
 $scriptsRoot = $PSScriptRoot
 $launcherPath = Join-Path $scriptsRoot "portable\start-portable.ps1"
 $updaterPath = Join-Path $scriptsRoot "portable\update-portable.ps1"
+$healthContractPath = Join-Path $scriptsRoot "portable\portable-health.ps1"
 $portableBuilderPath = Join-Path $scriptsRoot "build-portable.ps1"
 $updaterBuilderPath = Join-Path $scriptsRoot "build-portable-updater.ps1"
 
@@ -41,39 +42,62 @@ function Get-ScriptFunctionText($Ast, [string]$Name) {
 
 $launcherAst = Get-ScriptAst $launcherPath
 $updaterAst = Get-ScriptAst $updaterPath
+$healthContractAst = Get-ScriptAst $healthContractPath
 $portableBuilderAst = Get-ScriptAst $portableBuilderPath
 $updaterBuilderAst = Get-ScriptAst $updaterBuilderPath
 
 Invoke-Expression (Get-ScriptFunctionText $updaterAst "Test-AppHealthResponse")
+Invoke-Expression (Get-ScriptFunctionText $updaterAst "Test-InstalledPayloadFile")
+Invoke-Expression (Get-ScriptFunctionText $healthContractAst "Get-PortableHealthFailures")
+Invoke-Expression (Get-ScriptFunctionText $healthContractAst "Test-PortableHealthResponse")
 
 $expectedHealth = [pscustomobject]@{
+    product = "insect-specimen-workbench"
     status = "ok"
     app = "test-app"
     version = "v1.2.1"
     capability = "agent_workflows_v1"
 }
 $matchingHealth = [pscustomobject]@{
+    product = "insect-specimen-workbench"
     status = "ok"
     app = "test-app"
     version = "v1.2.1"
     capabilities = @("agent_workflows_v1")
 }
 $oldHealth = [pscustomobject]@{
+    product = "insect-specimen-workbench"
     status = "ok"
     app = "test-app"
     version = "v1.2.0"
     capabilities = @("agent_workflows_v1")
 }
 $missingVersionHealth = [pscustomobject]@{
+    product = "insect-specimen-workbench"
     status = "ok"
     app = "test-app"
     capabilities = @("agent_workflows_v1")
 }
 $missingCapabilityHealth = [pscustomobject]@{
+    product = "insect-specimen-workbench"
     status = "ok"
     app = "test-app"
     version = "v1.2.1"
     capabilities = @()
+}
+$wrongProductHealth = [pscustomobject]@{
+    product = "another-product"
+    status = "ok"
+    app = "test-app"
+    version = "v1.2.1"
+    capabilities = @("agent_workflows_v1")
+}
+$garbledAppHealth = [pscustomobject]@{
+    product = "insect-specimen-workbench"
+    status = "ok"
+    app = "????"
+    version = "v1.2.1"
+    capabilities = @("agent_workflows_v1")
 }
 
 if (-not (Test-AppHealthResponse $matchingHealth $expectedHealth)) {
@@ -87,6 +111,68 @@ if (Test-AppHealthResponse $missingVersionHealth $expectedHealth) {
 }
 if (Test-AppHealthResponse $missingCapabilityHealth $expectedHealth) {
     throw "Missing backend capability was accepted."
+}
+if (Test-AppHealthResponse $wrongProductHealth $expectedHealth) {
+    throw "Mismatched backend product identity was accepted."
+}
+if (-not (Test-AppHealthResponse $garbledAppHealth $expectedHealth)) {
+    throw "Display-name encoding affected stable product identity validation."
+}
+
+$payloadFileTestRoot = Join-Path ([IO.Path]::GetTempPath()) (
+    "portable payload file test " + [Guid]::NewGuid().ToString("N")
+)
+try {
+    New-Item -ItemType Directory -Path $payloadFileTestRoot | Out-Null
+    $payloadFileTestPath = Join-Path $payloadFileTestRoot "portable-health.ps1"
+    [IO.File]::WriteAllText(
+        $payloadFileTestPath,
+        "stable health helper",
+        (New-Object Text.UTF8Encoding($false))
+    )
+    $payloadFileTestItem = Get-Item -LiteralPath $payloadFileTestPath
+    $payloadFileTestManifest = [pscustomobject]@{
+        files = @(
+            [pscustomobject]@{
+                path = "portable-health.ps1"
+                size = [Int64]$payloadFileTestItem.Length
+                sha256 = (
+                    Get-FileHash -LiteralPath $payloadFileTestPath `
+                        -Algorithm SHA256
+                ).Hash.ToLowerInvariant()
+            }
+        )
+    }
+    if (
+        -not (Test-InstalledPayloadFile `
+            $payloadFileTestManifest `
+            $payloadFileTestRoot `
+            "portable-health.ps1")
+    ) {
+        throw "Matching installed health helper was rejected."
+    }
+    [IO.File]::AppendAllText($payloadFileTestPath, "corrupt")
+    if (
+        Test-InstalledPayloadFile `
+            $payloadFileTestManifest `
+            $payloadFileTestRoot `
+            "portable-health.ps1"
+    ) {
+        throw "Corrupted installed health helper was accepted."
+    }
+    Remove-Item -LiteralPath $payloadFileTestPath -Force
+    if (
+        Test-InstalledPayloadFile `
+            $payloadFileTestManifest `
+            $payloadFileTestRoot `
+            "portable-health.ps1"
+    ) {
+        throw "Missing installed health helper was accepted."
+    }
+}
+finally {
+    Remove-Item -LiteralPath $payloadFileTestRoot -Recurse -Force `
+        -ErrorAction SilentlyContinue
 }
 
 $launcherText = $launcherAst.Extent.Text
@@ -232,6 +318,10 @@ if (
 }
 
 $updaterText = $updaterAst.Extent.Text
+$requiredInstallText = Get-ScriptFunctionText $updaterAst "Assert-RequiredInstall"
+if ($requiredInstallText -match 'portable-health\.ps1') {
+    throw "Updater rejects legacy installations without the new health helper."
+}
 if (
     $updaterText -notmatch
         '(?s)Stop-OwnedListener.+?Test-SamePath\s+\$actualExecutable\s+\$expectedPython.+?Stop-Process\s+-Id\s+\$listener\.OwningProcess'
@@ -247,16 +337,18 @@ if (
 
 if (
     $portableBuilderAst.Extent.Text -notmatch
-        '(?m)^\s*\[string\]\$Version\s*=\s*"v1\.2\.1"\s*,?\s*$'
+        '(?m)^\s*\[string\]\$Version\s*=\s*"v1\.2\.4"\s*,?\s*$'
 ) {
-    throw "Portable builder default version is not v1.2.1."
+    throw "Portable builder default version is not v1.2.4."
 }
 $updaterBuilderText = $updaterBuilderAst.Extent.Text
 if (
     $updaterBuilderText -notmatch
         'version\s*=\s*\[string\]\$release\.version' -or
     $updaterBuilderText -notmatch
-        'capability\s*=\s*"agent_workflows_v1"'
+        'capability\s*=\s*"agent_workflows_v1"' -or
+    $updaterBuilderText -notmatch
+        'product\s*=\s*"insect-specimen-workbench"'
 ) {
     throw "Updater manifest does not carry the version handshake metadata."
 }

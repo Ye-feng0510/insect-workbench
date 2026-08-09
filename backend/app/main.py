@@ -20,7 +20,7 @@ from app.routers import auth as auth_router
 from app.routers import admin as admin_router
 from app.routers import workflows as workflows_router
 from app.services.prefetch_service import PrefetchWorker
-from app.version import APP_CAPABILITIES, APP_VERSION
+from app.version import APP_CAPABILITIES, APP_PRODUCT, APP_VERSION
 
 
 @asynccontextmanager
@@ -98,6 +98,7 @@ async def health() -> dict:
     """健康检查接口,用于前后端连通测试。"""
     return {
         "status": "ok",
+        "product": APP_PRODUCT,
         "app": settings.app_name,
         "version": APP_VERSION,
         "capabilities": list(APP_CAPABILITIES),

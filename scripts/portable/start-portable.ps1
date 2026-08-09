@@ -6,12 +6,19 @@ $envFile = Join-Path $root ".env"
 $releaseFile = Join-Path $root "release.json"
 $url = "http://127.0.0.1:8000"
 $healthUrl = "$url/api/health"
+$healthContractFile = Join-Path $root "portable-health.ps1"
+$expectedProduct = "insect-specimen-workbench"
 $expectedApp = "昆虫标本图片识别与Excel录入工作台"
 $expectedCapability = "agent_workflows_v1"
 $openBrowser = $env:INSECT_PORTABLE_NO_BROWSER -ne "1"
 $launcherLock = $null
 $backendProcess = $null
 $backendEstablished = $false
+
+if (-not (Test-Path -LiteralPath $healthContractFile -PathType Leaf)) {
+    throw "便携版健康检查组件缺失，请重新下载并完整解压便携版。"
+}
+. $healthContractFile
 
 function Get-FullPath([string]$Path) {
     return [IO.Path]::GetFullPath($Path).TrimEnd(
@@ -84,26 +91,38 @@ function ConvertTo-WindowsCommandLineArgument([string]$Argument) {
     return $encoded.ToString()
 }
 
-function Test-HealthCapability($Response, [string]$Capability) {
-    if ([string]$Response.capability -eq $Capability) {
-        return $true
+function Get-AppHealthCheck([string]$ExpectedVersion) {
+    $expectedHealth = [pscustomobject]@{
+        product = $expectedProduct
+        app = $expectedApp
+        version = $ExpectedVersion
+        capability = $expectedCapability
     }
-    return @($Response.capabilities) -contains $Capability
+    try {
+        $response = Get-PortableHealthResponse $healthUrl
+        $failures = @(Get-PortableHealthFailures $response $expectedHealth)
+        return [pscustomobject]@{
+            Passed = $failures.Count -eq 0
+            Failures = $failures
+        }
+    }
+    catch {
+        return [pscustomobject]@{
+            Passed = $false
+            Failures = @("请求或 UTF-8 JSON 解析失败: $($_.Exception.Message)")
+        }
+    }
 }
 
 function Test-AppHealth([string]$ExpectedVersion) {
-    try {
-        $response = Invoke-RestMethod -Uri $healthUrl -TimeoutSec 2
-        return (
-            $response.status -eq "ok" -and
-            $response.app -eq $expectedApp -and
-            [string]$response.version -eq $ExpectedVersion -and
-            (Test-HealthCapability $response $expectedCapability)
-        )
+    return (Get-AppHealthCheck $ExpectedVersion).Passed
+}
+
+function Get-HealthFailureText($HealthCheck) {
+    if (-not $HealthCheck.Failures -or $HealthCheck.Failures.Count -eq 0) {
+        return "未知原因"
     }
-    catch {
-        return $false
-    }
+    return [string]::Join(", ", [string[]]$HealthCheck.Failures)
 }
 
 function Get-PortListener {
@@ -180,6 +199,7 @@ function Wait-PortableBackendEstablished(
     [string]$ExpectedPython,
     [string]$ExpectedVersion
 ) {
+    $lastHealthFailure = "尚未收到健康响应"
     for ($attempt = 0; $attempt -lt 120; $attempt++) {
         $Process.Refresh()
         if ($Process.HasExited) {
@@ -198,17 +218,22 @@ function Wait-PortableBackendEstablished(
                 )
             }
             $actualExecutable = Get-ProcessExecutable $Process.Id
+            $healthCheck = Get-AppHealthCheck $ExpectedVersion
             if (
                 $actualExecutable -and
                 (Test-SamePath $actualExecutable $ExpectedPython) -and
-                (Test-AppHealth $ExpectedVersion)
+                $healthCheck.Passed
             ) {
                 return
             }
+            $lastHealthFailure = Get-HealthFailureText $healthCheck
         }
         Start-Sleep -Milliseconds 500
     }
-    throw "内置后台未能在 60 秒内通过身份与健康检查。"
+    throw (
+        "内置后台未能在 60 秒内通过身份与健康检查。最近一次健康检查失败原因：" +
+        $lastHealthFailure
+    )
 }
 
 function Stop-FailedBackendStart($Process, [string]$ExpectedPython) {

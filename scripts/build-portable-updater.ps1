@@ -124,7 +124,8 @@ foreach ($required in @(
     "runtime\python\python.exe",
     "backend\app\main.py",
     "frontend\dist\index.html",
-    "start-portable.ps1"
+    "start-portable.ps1",
+    "portable-health.ps1"
 )) {
     if (-not (Test-Path -LiteralPath (Join-Path $portableRoot $required) -PathType Leaf)) {
         throw "Portable archive is incomplete; missing: $required"
@@ -148,13 +149,21 @@ $portableScripts = Join-Path $PSScriptRoot "portable"
 $updaterSource = Join-Path $portableScripts "update-portable.ps1"
 $batchSource = Join-Path $portableScripts "update-portable.bat"
 $inspectorSource = Join-Path $portableScripts "inspect-portable-state.py"
-foreach ($source in @($updaterSource, $batchSource, $inspectorSource)) {
+$healthContractSource = Join-Path $portableScripts "portable-health.ps1"
+foreach ($source in @(
+    $updaterSource,
+    $batchSource,
+    $inspectorSource,
+    $healthContractSource
+)) {
     if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
         throw "Updater source file is missing: $source"
     }
 }
 Copy-TextFile $updaterSource (Join-Path $packageRoot "update-portable.ps1") $utf8Bom
 Copy-TextFile $batchSource (Join-Path $packageRoot "update-portable.bat") $utf8
+Copy-TextFile $healthContractSource `
+    (Join-Path $packageRoot "portable-health.ps1") $utf8Bom
 $inspectorContent = [IO.File]::ReadAllText($inspectorSource) `
     -replace "`r?`n", "`n"
 [IO.File]::WriteAllText(
@@ -184,6 +193,7 @@ $manifest = [ordered]@{
     arch = [string]$release.arch
     health = [ordered]@{
         url = "http://127.0.0.1:8000/api/health"
+        product = "insect-specimen-workbench"
         app = "昆虫标本图片识别与Excel录入工作台"
         status = "ok"
         version = [string]$release.version

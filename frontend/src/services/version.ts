@@ -1,6 +1,6 @@
 import api from './api'
 
-export const EXPECTED_BACKEND_VERSION = 'v1.2.3'
+export const EXPECTED_BACKEND_VERSION = 'v1.2.4'
 export const REQUIRED_BACKEND_CAPABILITY = 'agent_workflows_v1'
 
 interface HealthResponse {

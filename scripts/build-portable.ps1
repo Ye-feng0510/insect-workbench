@@ -1,5 +1,5 @@
 ﻿param(
-    [string]$Version = "v1.2.1",
+    [string]$Version = "v1.2.4",
     [string]$BuildPython = "",
     [string]$OutputDirectory = ""
 )
@@ -125,6 +125,15 @@ $launcherDestination = Join-Path $packageRoot "start-portable.ps1"
 $launcherContent = [IO.File]::ReadAllText($launcherSource) `
     -replace "`r?`n", "`r`n"
 [IO.File]::WriteAllText($launcherDestination, $launcherContent, $utf8Bom)
+$healthContractSource = Join-Path $PSScriptRoot "portable\portable-health.ps1"
+$healthContractDestination = Join-Path $packageRoot "portable-health.ps1"
+$healthContractContent = [IO.File]::ReadAllText($healthContractSource) `
+    -replace "`r?`n", "`r`n"
+[IO.File]::WriteAllText(
+    $healthContractDestination,
+    $healthContractContent,
+    $utf8Bom
+)
 $batchSource = Join-Path $PSScriptRoot "portable\start-portable.bat"
 $batchDestination = Join-Path $packageRoot "启动昆虫标本工作台.bat"
 $batchContent = [IO.File]::ReadAllText($batchSource) -replace "`r?`n", "`r`n"
@@ -201,7 +210,8 @@ Get-ChildItem -LiteralPath $packageRoot -Recurse -File |
 foreach ($required in @(
     "runtime\python\python.exe",
     "backend\app\main.py",
-    "frontend\dist\index.html"
+    "frontend\dist\index.html",
+    "portable-health.ps1"
 )) {
     if (-not (Test-Path -LiteralPath (Join-Path $packageRoot $required) -PathType Leaf)) {
         throw "便携包清理后缺少必要文件：$required"
