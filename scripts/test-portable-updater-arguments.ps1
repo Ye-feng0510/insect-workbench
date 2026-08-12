@@ -14,8 +14,8 @@ if ($parseErrors.Count -ne 0) {
 }
 
 $updaterText = $ast.Extent.Text
-if ($updaterText -notmatch '(?m)^\$PayloadSchemaVersion\s*=\s*6\s*$') {
-    throw "Updater payload schema version is not pinned to 6."
+if ($updaterText -notmatch '(?m)^\$PayloadSchemaVersion\s*=\s*8\s*$') {
+    throw "Updater payload schema version is not pinned to 8."
 }
 if ($updaterText -match 'RequireSchema4') {
     throw "Updater still contains the obsolete schema 4 validation switch."
@@ -109,22 +109,22 @@ function New-TestState([int]$SchemaVersion) {
     }
 }
 
-$schema5Rejected = $false
+$schema7Rejected = $false
 try {
-    Assert-StateEquivalent (New-TestState 5) (New-TestState 5) `
-        -MinimumSchemaVersion 6
+    Assert-StateEquivalent (New-TestState 7) (New-TestState 7) `
+        -MinimumSchemaVersion 8
 }
 catch {
-    if ($_.Exception.Message -ne "Updated database schema_version is below 6.") {
+    if ($_.Exception.Message -ne "Updated database schema_version is below 8.") {
         throw
     }
-    $schema5Rejected = $true
+    $schema7Rejected = $true
 }
-if (-not $schema5Rejected) {
-    throw "Updater accepted schema version 5 for a schema 6 payload."
+if (-not $schema7Rejected) {
+    throw "Updater accepted schema version 7 for a schema 8 payload."
 }
-Assert-StateEquivalent (New-TestState 6) (New-TestState 6) `
-    -MinimumSchemaVersion 6
+Assert-StateEquivalent (New-TestState 8) (New-TestState 8) `
+    -MinimumSchemaVersion 8
 
 $launchFunctionAst = $ast.Find(
     {

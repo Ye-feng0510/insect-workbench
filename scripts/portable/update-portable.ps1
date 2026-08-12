@@ -8,7 +8,7 @@
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version 2.0
-$PayloadSchemaVersion = 6
+$PayloadSchemaVersion = 8
 
 $updaterRoot = $PSScriptRoot
 $manifestPath = Join-Path $updaterRoot "manifest.json"
