@@ -487,6 +487,7 @@ async def start_next_item(
         pf is not None
         and pf.status == PREFETCH_STATUS_READY
         and pf.result_json
+        and pf.rotation_degrees == rotation_degrees % 360
         and (current_fp is None or pf.config_fingerprint == current_fp)
     ):
         image_path = _copy_for_recognition(item)
@@ -542,7 +543,11 @@ async def start_next_item(
                 raise
 
     # 如果正在预加载(running/queued)，等待它完成（最多120秒），避免重复调用模型
-    if pf is not None and pf.status in (PREFETCH_STATUS_RUNNING, PREFETCH_STATUS_QUEUED):
+    if (
+        pf is not None
+        and pf.rotation_degrees == rotation_degrees % 360
+        and pf.status in (PREFETCH_STATUS_RUNNING, PREFETCH_STATUS_QUEUED)
+    ):
         pf_id = pf.id
         waited = 0
         max_wait = settings.model_timeout_seconds
@@ -750,20 +755,6 @@ def delete_batch(db: Session, owner_id: int) -> dict[str, Any]:
     if batch is None:
         raise HTTPException(status_code=404, detail="没有可删除的素材批次")
 
-    completed_count = (
-        db.query(MaterialItem)
-        .filter(
-            MaterialItem.batch_id == batch.id,
-            MaterialItem.status == MATERIAL_STATUS_COMPLETED,
-        )
-        .count()
-    )
-    if completed_count > 0:
-        raise HTTPException(
-            status_code=409,
-            detail=f"当前批次有 {completed_count} 张已完成的素材,已写入 Excel,不能删除",
-        )
-
     linked_items = (
         db.query(MaterialItem)
         .filter(
@@ -774,12 +765,24 @@ def delete_batch(db: Session, owner_id: int) -> dict[str, Any]:
     )
     for item in linked_items:
         record = db.get(SpecimenRecord, item.record_id)
-        if record is not None and record.status in ACTIVE_DRAFT_STATUSES:
+        if record is not None:
+            was_active = record.status in ACTIVE_DRAFT_STATUSES
             record.status = STATUS_DISCARDED
-            from app.services import quota_service
-            quota_service.release(db, record.id)
+            workflow = (
+                db.query(WorkflowSession)
+                .filter(WorkflowSession.record_id == record.id)
+                .first()
+            )
+            if workflow is not None:
+                workflow.state = STATUS_DISCARDED
+                workflow.revision += 1
+            if was_active:
+                from app.services import quota_service
+                quota_service.release(db, record.id)
             if record.image_path:
                 Path(record.image_path).unlink(missing_ok=True)
+            if record.processed_image_path:
+                Path(record.processed_image_path).unlink(missing_ok=True)
 
     extract_dir = batch.extract_dir
     zip_path = batch.stored_zip_path

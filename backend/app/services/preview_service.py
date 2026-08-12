@@ -14,6 +14,7 @@ from typing import Any
 from fastapi import HTTPException
 from openpyxl import load_workbook
 from openpyxl.utils import column_index_from_string, get_column_letter
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.field_mapping import ALL_TARGET_FIELDS
@@ -36,6 +37,7 @@ def get_preview(
     db: Session,
     mode: str = "target",
     limit: int = 100,
+    offset: int = 0,
     owner_id: int | None = None,
 ) -> dict[str, Any]:
     """生成 Excel 预览数据。
@@ -101,6 +103,16 @@ def get_preview(
     wb.close()
 
     # 读取已完成记录(按 id 升序)
+    completed_count = (
+        db.query(func.count(SpecimenRecord.id))
+        .filter(
+            SpecimenRecord.owner_id == owner_id,
+            SpecimenRecord.status == STATUS_COMPLETED,
+        )
+        .scalar()
+        or 0
+    )
+    effective_offset = min(offset, completed_count)
     completed_records = (
         db.query(SpecimenRecord)
         .filter(
@@ -108,12 +120,14 @@ def get_preview(
             SpecimenRecord.status == STATUS_COMPLETED,
         )
         .order_by(SpecimenRecord.id.asc())
+        .offset(effective_offset)
+        .limit(limit)
         .all()
     )
 
     record_rows: list[dict[str, Any]] = []
     for idx, record in enumerate(completed_records):
-        excel_row = template.base_write_row + idx
+        excel_row = template.base_write_row + effective_offset + idx
         fields = recognition_service.record_to_fields(record)
         # 只保留预览模式中显示的字段
         if mode == "target":
@@ -136,7 +150,6 @@ def get_preview(
     all_rows = template_rows + record_rows
 
     # 计算统计信息
-    completed_count = len(completed_records)
     latest_write_row = template.base_write_row + completed_count - 1 if completed_count > 0 else None
     next_write_row = template.base_write_row + completed_count
 
@@ -148,6 +161,9 @@ def get_preview(
         "columns": columns,
         "rows": all_rows,
         "completed_count": completed_count,
+        "offset": effective_offset,
+        "limit": limit,
+        "has_more": effective_offset + len(completed_records) < completed_count,
         "latest_write_row": latest_write_row,
         "next_write_row": next_write_row,
         "last_updated": datetime.now().isoformat(),

@@ -56,10 +56,10 @@ class Settings(BaseSettings):
     material_image_max_pixels: int = 40000000
 
     # 后台预加载(减少工作台图片切换等待时间)
-    material_prefetch_size: int = 20  # ready 低水位(目标保持多少张已就绪)
-    material_prefetch_concurrency: int = 4  # 初始模型并发数
-    material_prefetch_max_concurrency: int = 12  # 最大模型并发数
-    material_prefetch_max_lookahead: int = 60  # 最大前瞻排队数(含running/ready/failed)
+    material_prefetch_size: int = 30  # ready 低水位(目标保持多少张已就绪)
+    material_prefetch_concurrency: int = 3  # 前三张优先并行,之后动态降低并发
+    material_prefetch_max_concurrency: int = 3  # 低配置电脑最多并行三张
+    material_prefetch_max_lookahead: int = 30  # 最大前瞻排队数(含running/ready/failed)
     material_prefetch_interval: float = 1.0  # worker 轮询间隔(秒)
     material_prefetch_max_retries: int = 3  # 单张素材预加载失败重试次数
     material_prefetch_retry_delay: float = 5.0  # 重试初始延迟(秒)

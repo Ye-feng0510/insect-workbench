@@ -639,7 +639,7 @@ def test_delete_batch_with_processing_cleans_draft(materials_client):
     db.close()
 
 
-def test_delete_batch_with_completed_is_rejected(materials_client):
+def test_delete_batch_with_completed_discards_linked_record(materials_client):
     client, TestSession = materials_client
     assert upload_zip(client, {"done.jpg": image_bytes()}).status_code == 200
 
@@ -658,15 +658,16 @@ def test_delete_batch_with_completed_is_rejected(materials_client):
     item.record_id = record.id
     item.status = MATERIAL_STATUS_COMPLETED
     db.commit()
+    record_id = record.id
     db.close()
 
     deleted = client.delete("/api/materials/batch")
-    assert deleted.status_code == 409
-    assert "已完成" in deleted.json()["detail"]
+    assert deleted.status_code == 200
 
     db = TestSession()
-    assert db.query(MaterialBatch).count() == 1
-    assert db.query(MaterialItem).count() == 1
+    assert db.query(MaterialBatch).count() == 0
+    assert db.query(MaterialItem).count() == 0
+    assert db.get(SpecimenRecord, record_id).status == "discarded"
     db.close()
 
 

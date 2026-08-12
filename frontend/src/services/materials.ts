@@ -13,6 +13,14 @@ export async function getMaterialSummary(): Promise<MaterialSummary> {
   return data
 }
 
+export async function activateClassicWorkbench(): Promise<void> {
+  await api.post('/materials/workbench/activate')
+}
+
+export async function deactivateClassicWorkbench(): Promise<void> {
+  await api.post('/materials/workbench/deactivate')
+}
+
 export async function listMaterialItems(
   status?: MaterialStatus,
   limit = 200,

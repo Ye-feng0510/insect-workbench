@@ -356,7 +356,7 @@ export default function MaterialsPage() {
           <div className="w-96 rounded-xl bg-white p-6 shadow-xl">
             <h3 className="mb-2 text-lg font-semibold text-gray-800">删除素材批次</h3>
             <p className="mb-4 text-sm text-gray-500">
-              确定删除当前素材批次?未完成的草稿将被放弃,已跳过的记录将清除。此操作不可撤销。
+              确定删除当前素材批次?该批次已完成和未完成的记录、图片及预加载结果都将清除，已使用配额不会退回。此操作不可撤销。
             </p>
             <div className="flex justify-end gap-3">
               <button

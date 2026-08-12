@@ -13,6 +13,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import time
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -36,6 +37,26 @@ logger = logging.getLogger(__name__)
 
 # 全局 worker 单例
 _global_worker: PrefetchWorker | None = None
+_active_owners: dict[int, float] = {}
+_ACTIVE_OWNER_TTL_SECONDS = 90.0
+
+
+def activate_owner(owner_id: int) -> None:
+    """Mark an owner as actively using the classic workbench."""
+    _active_owners[owner_id] = time.monotonic() + _ACTIVE_OWNER_TTL_SECONDS
+    notify_worker()
+
+
+def deactivate_owner(owner_id: int) -> None:
+    _active_owners.pop(owner_id, None)
+
+
+def _active_owner_ids() -> list[int]:
+    now = time.monotonic()
+    expired = [owner_id for owner_id, deadline in _active_owners.items() if deadline <= now]
+    for owner_id in expired:
+        _active_owners.pop(owner_id, None)
+    return list(_active_owners)
 
 
 def compute_config_fingerprint(
@@ -156,6 +177,9 @@ class PrefetchWorker:
 
     async def _fill_window(self) -> None:
         """检查并并行填充预加载窗口。"""
+        active_owner_ids = _active_owner_ids()
+        if not active_owner_ids:
+            return
         fingerprint = _get_current_fingerprint()
         if fingerprint is None:
             self._clear_all()
@@ -167,6 +191,7 @@ class PrefetchWorker:
                 db.query(MaterialBatch)
                 .join(User, User.id == MaterialBatch.owner_id)
                 .filter(MaterialBatch.is_active.is_(True))
+                .filter(MaterialBatch.owner_id.in_(active_owner_ids))
                 .filter(User.is_active.is_(True))
                 .filter(
                     (User.role == ROLE_ADMIN)
@@ -300,6 +325,7 @@ class PrefetchWorker:
                         item_id=item.id,
                         status=PREFETCH_STATUS_QUEUED,
                         config_fingerprint=fingerprint,
+                        rotation_degrees=0,
                     )
                     db.add(pf)
                     db.commit()
@@ -318,7 +344,12 @@ class PrefetchWorker:
                     MaterialPrefetchResult.status == PREFETCH_STATUS_QUEUED,
                     MaterialPrefetchResult.config_fingerprint == fingerprint,
                 )
-                .limit(settings.material_prefetch_concurrency)
+                .limit(
+                    min(
+                        settings.material_prefetch_concurrency,
+                        3 if ready_count < 3 else 2 if ready_count < target // 2 else 1,
+                    )
+                )
                 .all()
             )
         finally:
@@ -385,6 +416,7 @@ class PrefetchWorker:
 
             stored_path = fresh.stored_path
             original_filename = fresh.original_filename
+            prefetch_rotation = pf.rotation_degrees
         finally:
             db.close()
 
@@ -404,7 +436,7 @@ class PrefetchWorker:
                 db2.close()
 
             result = await recognition_service.recognize_image_with_ocr(
-                client, str(source), prompt, 0
+                client, str(source), prompt, prefetch_rotation
             )
         except Exception as exc:
             self._mark_failed(pf_id, str(getattr(exc, "detail", exc)))

@@ -473,6 +473,7 @@ class MaterialPrefetchResult(Base):
         unique=True,
         index=True,
     )
+    rotation_degrees: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(
         String(50), default=PREFETCH_STATUS_QUEUED, index=True
     )

@@ -230,10 +230,10 @@ class TestPreview:
         assert response.status_code == 409
         assert "图像编号已存在" in response.json()["detail"]
 
-    def test_preview_returns_all_records_beyond_legacy_limit(
+    def test_preview_paginates_records_and_preserves_excel_metadata(
         self, client_with_template
     ):
-        """limit 参数不截断记录，行顺序和写入元数据覆盖完整结果集。"""
+        """limit bounds preview work while metadata still covers the full export."""
         TestSession = client_with_template.test_session_factory
         with TestSession() as db:
             db.add_all(
@@ -257,11 +257,25 @@ class TestPreview:
         record_rows = [
             row for row in data["rows"] if row["status"] == "completed"
         ]
-        assert len(record_rows) == 107
+        assert len(record_rows) == 100
         assert data["completed_count"] == 107
+        assert data["offset"] == 0
+        assert data["limit"] == 100
+        assert data["has_more"] is True
         assert [row["record_id"] for row in record_rows] == sorted(
             row["record_id"] for row in record_rows
         )
-        assert record_rows[-1]["excel_row"] == 114
+        assert record_rows[-1]["excel_row"] == 107
         assert data["latest_write_row"] == 114
         assert data["next_write_row"] == 115
+
+        second_page = client_with_template.get(
+            "/api/excel/preview?mode=target&limit=100&offset=100"
+        ).json()
+        second_page_rows = [
+            row for row in second_page["rows"] if row["status"] == "completed"
+        ]
+        assert len(second_page_rows) == 7
+        assert second_page_rows[0]["excel_row"] == 108
+        assert second_page_rows[-1]["excel_row"] == 114
+        assert second_page["has_more"] is False

@@ -16,7 +16,7 @@ from app.config import EXPORTS_DIR, settings
 from app.database import Base
 from app.models import ExcelTemplate, ExportArtifact, ROLE_ADMIN, User
 
-LATEST_SCHEMA_VERSION = 6
+LATEST_SCHEMA_VERSION = 7
 
 
 def _validate_new_admin_credentials(username: str, password: str) -> None:
@@ -386,6 +386,20 @@ def migrate(engine: Engine) -> None:
                     )
                 )
             conn.execute(text("INSERT INTO schema_version(version) VALUES (6)"))
+
+        if 7 not in applied:
+            if (
+                "material_prefetch_results" in existing_tables
+                and "rotation_degrees"
+                not in _columns(conn, "material_prefetch_results")
+            ):
+                conn.execute(
+                    text(
+                        "ALTER TABLE material_prefetch_results ADD COLUMN "
+                        "rotation_degrees INTEGER NOT NULL DEFAULT 0"
+                    )
+                )
+            conn.execute(text("INSERT INTO schema_version(version) VALUES (7)"))
 
     # Creates only missing tables; ownership changes above never rely on create_all.
     Base.metadata.create_all(bind=engine)

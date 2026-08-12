@@ -44,6 +44,26 @@ async def summary(
     return materials_service.get_summary(db, ctx.owner_id)
 
 
+@router.post("/workbench/activate")
+async def activate_classic_workbench(
+    ctx: AuthContext = Depends(get_auth_context),
+):
+    from app.services.prefetch_service import activate_owner
+
+    activate_owner(ctx.owner_id)
+    return {"status": "active"}
+
+
+@router.post("/workbench/deactivate")
+async def deactivate_classic_workbench(
+    ctx: AuthContext = Depends(get_auth_context),
+):
+    from app.services.prefetch_service import deactivate_owner
+
+    deactivate_owner(ctx.owner_id)
+    return {"status": "inactive"}
+
+
 @router.get("/items", response_model=list[MaterialItemInfo])
 async def items(
     status: str | None = Query(None),

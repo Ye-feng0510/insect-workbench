@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import {
   Upload, ZoomIn, ZoomOut, RotateCw, RotateCcw, Loader2,
   CheckCircle, AlertCircle, RefreshCw, Trash2, Image as ImageIcon,
-  ListStart, SkipForward,
+  ListStart, SkipForward, ChevronDown, ChevronUp,
 } from 'lucide-react'
 import { useToast } from '@/components/Toast'
 import Loading from '@/components/Loading'
@@ -14,6 +14,8 @@ import {
   getNextPreview,
   getPrefetchStatus,
   skipMaterial,
+  activateClassicWorkbench,
+  deactivateClassicWorkbench,
 } from '@/services/materials'
 import type { MaterialPrefetchStatus, MaterialPreview } from '@/types'
 import { extractErrorMessage } from '@/types'
@@ -61,6 +63,7 @@ export default function WorkbenchPage() {
   const [skipping, setSkipping] = useState(false)
   const [prefetchStatus, setPrefetchStatus] = useState<MaterialPrefetchStatus | null>(null)
   const [localImageUrl, setLocalImageUrl] = useState('')
+  const [previewOpen, setPreviewOpen] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
   const extractionLockRef = useRef(false)
   const editRevisionRef = useRef(0)
@@ -68,7 +71,13 @@ export default function WorkbenchPage() {
 
   useEffect(() => {
     mountedRef.current = true
+    void activateClassicWorkbench()
+    const heartbeat = window.setInterval(() => {
+      void activateClassicWorkbench()
+    }, 60_000)
     return () => {
+      window.clearInterval(heartbeat)
+      void deactivateClassicWorkbench()
       mountedRef.current = false
       extractionLockRef.current = false
     }
@@ -881,13 +890,24 @@ export default function WorkbenchPage() {
         </div>
       </div>
 
-      {/* Excel 实时预览区 */}
-      <div className="shrink-0" style={{ height: 'clamp(310px, 35vh, 450px)' }}>
-        <ExcelPreview
-          draftRow={draft?.status === STATUS.AWAITING_CONFIRMATION ? draft.extracted : null}
-          highlightRow={highlightRow}
-          refreshRevision={previewRevision}
-        />
+      <div className="shrink-0 rounded-xl border border-gray-200 bg-white">
+        <button
+          type="button"
+          onClick={() => setPreviewOpen((open) => !open)}
+          className="flex w-full items-center justify-between px-4 py-3 text-sm font-medium text-gray-700"
+        >
+          Excel 实时预览（按需加载最近记录）
+          {previewOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+        </button>
+        {previewOpen ? (
+          <div style={{ height: 'clamp(310px, 35vh, 450px)' }}>
+            <ExcelPreview
+              draftRow={draft?.status === STATUS.AWAITING_CONFIRMATION ? draft.extracted : null}
+              highlightRow={highlightRow}
+              refreshRevision={previewRevision}
+            />
+          </div>
+        ) : null}
       </div>
 
       {/* 放弃草稿弹窗 */}

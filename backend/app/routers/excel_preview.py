@@ -21,8 +21,9 @@ router = APIRouter(prefix="/api/excel", tags=["excel-preview"])
 async def get_preview(
     mode: str = Query("target", pattern="^(target|all)$"),
     limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
     ctx: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """获取 Excel 实时预览数据。"""
-    return preview_service.get_preview(db, mode, limit, ctx.owner_id)
+    return preview_service.get_preview(db, mode, limit, offset, ctx.owner_id)

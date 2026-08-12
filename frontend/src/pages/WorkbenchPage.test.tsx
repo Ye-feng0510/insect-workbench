@@ -16,6 +16,8 @@ vi.mock('@/services/draft', () => ({
 }))
 
 vi.mock('@/services/materials', () => ({
+  activateClassicWorkbench: vi.fn().mockResolvedValue(undefined),
+  deactivateClassicWorkbench: vi.fn().mockResolvedValue(undefined),
   extractNextMaterial: vi.fn(),
   getMaterialSummary: vi.fn(),
   getNextPreview: vi.fn(),

@@ -233,6 +233,9 @@ export interface PreviewResponse {
   columns: PreviewColumn[]
   rows: PreviewRow[]
   completed_count: number
+  offset: number
+  limit: number
+  has_more: boolean
   latest_write_row: number | null
   next_write_row: number
   last_updated: string

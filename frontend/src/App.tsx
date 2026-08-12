@@ -1,14 +1,7 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import Layout from './components/Layout'
-import SettingsPage from './pages/SettingsPage'
-import AIWorkbenchPage from './pages/AIWorkbenchPage'
-import WorkbenchPage from './pages/WorkbenchPage'
-import RecordsPage from './pages/RecordsPage'
-import ExportPage from './pages/ExportPage'
-import MaterialsPage from './pages/MaterialsPage'
 import LoginPage from './pages/LoginPage'
-import AdminUsersPage from './pages/AdminUsersPage'
 import { PublicOnly, RequireAdmin, RequireAuth } from './components/AuthGuards'
 import {
   checkBackendCompatibility,
@@ -16,6 +9,18 @@ import {
   REQUIRED_BACKEND_CAPABILITY,
   type BackendCompatibility,
 } from './services/version'
+
+const SettingsPage = lazy(() => import('./pages/SettingsPage'))
+const AIWorkbenchPage = lazy(() => import('./pages/AIWorkbenchPage'))
+const WorkbenchPage = lazy(() => import('./pages/WorkbenchPage'))
+const RecordsPage = lazy(() => import('./pages/RecordsPage'))
+const ExportPage = lazy(() => import('./pages/ExportPage'))
+const MaterialsPage = lazy(() => import('./pages/MaterialsPage'))
+const AdminUsersPage = lazy(() => import('./pages/AdminUsersPage'))
+
+function LazyPage({ children }: { children: ReactNode }) {
+  return <Suspense fallback={<div className="p-6 text-sm text-gray-500">正在加载页面…</div>}>{children}</Suspense>
+}
 
 export default function App() {
   const [compatibility, setCompatibility] = useState<BackendCompatibility | null>(null)
@@ -126,17 +131,17 @@ export default function App() {
           </RequireAuth>
         )}
       >
-        <Route index element={<Navigate to="/agent-workbench" replace />} />
-        <Route path="/agent-workbench" element={<AIWorkbenchPage />} />
-        <Route path="/workbench" element={<WorkbenchPage />} />
-        <Route path="/materials" element={<MaterialsPage />} />
-        <Route path="/records" element={<RecordsPage />} />
-        <Route path="/export" element={<ExportPage />} />
+        <Route index element={<Navigate to="/workbench" replace />} />
+        <Route path="/agent-workbench" element={<LazyPage><AIWorkbenchPage /></LazyPage>} />
+        <Route path="/workbench" element={<LazyPage><WorkbenchPage /></LazyPage>} />
+        <Route path="/materials" element={<LazyPage><MaterialsPage /></LazyPage>} />
+        <Route path="/records" element={<LazyPage><RecordsPage /></LazyPage>} />
+        <Route path="/export" element={<LazyPage><ExportPage /></LazyPage>} />
         <Route
           path="/settings"
           element={(
             <RequireAdmin>
-              <SettingsPage />
+            <LazyPage><SettingsPage /></LazyPage>
             </RequireAdmin>
           )}
         />
@@ -144,11 +149,11 @@ export default function App() {
           path="/admin/users"
           element={(
             <RequireAdmin>
-              <AdminUsersPage />
+            <LazyPage><AdminUsersPage /></LazyPage>
             </RequireAdmin>
           )}
         />
-        <Route path="*" element={<Navigate to="/agent-workbench" replace />} />
+        <Route path="*" element={<Navigate to="/workbench" replace />} />
       </Route>
     </Routes>
   )
