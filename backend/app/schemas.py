@@ -95,6 +95,15 @@ class QuotaUpdate(BaseModel):
     reason: str = Field(default="", max_length=500)
 
 
+class AdminDataResetRequest(BaseModel):
+    records: bool = True
+    materials: bool = True
+    workflows: bool = True
+    taxonomy: bool = True
+    exports: bool = False
+    confirmation_username: str = Field(min_length=1, max_length=100)
+
+
 # ============================================================
 # 设置
 # ============================================================

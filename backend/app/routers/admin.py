@@ -15,6 +15,8 @@ from app.models import (
     WorkflowUsage,
 )
 from app.schemas import QuotaUpdate, UserCreate, UserInfo, UserUpdate
+from app.schemas import AdminDataResetRequest
+from app.services import admin_data_service
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -159,3 +161,41 @@ def usage_history(
         }
         for row in rows
     ]
+
+
+@router.get("/users/{user_id}/data-summary")
+def user_data_summary(
+    user_id: int,
+    _ctx: AuthContext = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    try:
+        return admin_data_service.get_data_summary(db, user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/users/{user_id}/reset-data")
+def reset_user_data(
+    user_id: int,
+    req: AdminDataResetRequest,
+    _ctx: AuthContext = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    target = db.get(User, user_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    if req.confirmation_username.strip() != target.username:
+        raise HTTPException(status_code=409, detail="用户名确认不匹配")
+    try:
+        return admin_data_service.reset_user_data(
+            db,
+            user_id,
+            records=req.records,
+            materials=req.materials,
+            workflows=req.workflows,
+            taxonomy=req.taxonomy,
+            exports=req.exports,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc

@@ -4,12 +4,37 @@ import type {
   CreateUserRequest,
   QuotaAdjustment,
   WorkflowUsage,
+  AdminDataResetResult,
+  AdminDataSummary,
 } from '@/types'
 
 function unwrapList<T>(data: T[] | { items: T[] } | { users: T[] }): T[] {
   if (Array.isArray(data)) return data
   if ('items' in data) return data.items
   return data.users
+}
+
+export async function getUserDataSummary(userId: number): Promise<AdminDataSummary> {
+  const { data } = await api.get<AdminDataSummary>(`/admin/users/${userId}/data-summary`)
+  return data
+}
+
+export async function resetUserData(
+  userId: number,
+  confirmationUsername: string,
+  options: {
+    records: boolean
+    materials: boolean
+    workflows: boolean
+    taxonomy: boolean
+    exports: boolean
+  },
+): Promise<AdminDataResetResult> {
+  const { data } = await api.post<AdminDataResetResult>(
+    `/admin/users/${userId}/reset-data`,
+    { ...options, confirmation_username: confirmationUsername },
+  )
+  return data
 }
 
 export async function listUsers(): Promise<AuthUser[]> {

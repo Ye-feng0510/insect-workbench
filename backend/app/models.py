@@ -551,8 +551,9 @@ class WorkflowUsage(Base):
     owner_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
-    record_id: Mapped[int] = mapped_column(
-        ForeignKey("specimen_records.id", ondelete="CASCADE"),
+    record_id: Mapped[int | None] = mapped_column(
+        ForeignKey("specimen_records.id", ondelete="SET NULL"),
+        nullable=True,
         unique=True,
         index=True,
     )

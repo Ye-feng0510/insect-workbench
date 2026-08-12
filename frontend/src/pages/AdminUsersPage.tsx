@@ -21,11 +21,18 @@ import {
   createUser,
   getQuotaHistory,
   getUsageHistory,
+  getUserDataSummary,
   resetUserPassword,
+  resetUserData,
   setUserActive,
   setUserQuota,
 } from '@/services/adminUsers'
-import type { AuthUser, QuotaAdjustment, WorkflowUsage } from '@/types'
+import type {
+  AdminDataSummary,
+  AuthUser,
+  QuotaAdjustment,
+  WorkflowUsage,
+} from '@/types'
 import { extractErrorMessage } from '@/types'
 
 export default function AdminUsersPage() {
@@ -49,6 +56,16 @@ export default function AdminUsersPage() {
   const [historyLoading, setHistoryLoading] = useState(false)
   const [quotaHistory, setQuotaHistory] = useState<QuotaAdjustment[]>([])
   const [usageHistory, setUsageHistory] = useState<WorkflowUsage[]>([])
+  const [dataSummary, setDataSummary] = useState<AdminDataSummary | null>(null)
+  const [dataOptions, setDataOptions] = useState({
+    records: true,
+    materials: true,
+    workflows: true,
+    taxonomy: true,
+    exports: false,
+  })
+  const [confirmationUsername, setConfirmationUsername] = useState('')
+  const [dataBusy, setDataBusy] = useState(false)
   const historyRequestRef = useRef(0)
 
   useEffect(() => {
@@ -67,6 +84,7 @@ export default function AdminUsersPage() {
     if (!userId) {
       setQuotaHistory([])
       setUsageHistory([])
+      setDataSummary(null)
       setHistoryLoading(false)
       return
     }
@@ -76,11 +94,13 @@ export default function AdminUsersPage() {
     return Promise.all([
       getQuotaHistory(userId),
       getUsageHistory(userId),
+      getUserDataSummary(userId),
     ])
-      .then(([quota, usage]) => {
+      .then(([quota, usage, summary]) => {
         if (requestId === historyRequestRef.current) {
           setQuotaHistory(quota)
           setUsageHistory(usage)
+          setDataSummary(summary)
         }
       })
       .catch((error) => {
@@ -167,6 +187,25 @@ export default function AdminUsersPage() {
       show(extractErrorMessage(error, '重置密码失败'), 'error')
     } finally {
       setBusyUserId(null)
+    }
+  }
+
+  const handleResetData = async () => {
+    if (!detailUser || confirmationUsername.trim() !== detailUser.username) return
+    setDataBusy(true)
+    try {
+      const result = await resetUserData(
+        detailUser.id,
+        confirmationUsername.trim(),
+        dataOptions,
+      )
+      setConfirmationUsername('')
+      await reload()
+      show(`业务数据已清理，释放 ${Math.round(result.released_bytes / 1024 / 1024)} MB`, 'success')
+    } catch (error) {
+      show(extractErrorMessage(error, '清理用户数据失败'), 'error')
+    } finally {
+      setDataBusy(false)
     }
   }
 
@@ -410,6 +449,65 @@ export default function AdminUsersPage() {
             <CheckCircle2 className="h-4 w-4" />
             当前已计费 {detailUser.workflow_charged} 次，预留 {detailUser.workflow_reserved} 次。
           </p>
+          <div className="space-y-3 rounded-lg border border-red-200 bg-red-50/50 p-4">
+            <div>
+              <h3 className="font-semibold text-red-700">业务数据清理</h3>
+              <p className="mt-1 text-xs text-red-600">
+                保留账号、模板、配额和已收费审计，不会退款；清理素材和记录会物理删除关联文件。
+              </p>
+            </div>
+            {dataSummary ? (
+              <p className="text-xs text-gray-600">
+                记录 {dataSummary.records} 条，素材 {dataSummary.material_items} 张，
+                工作流 {dataSummary.workflow_sessions} 个，导出 {dataSummary.exports} 个，
+                预计可释放 {Math.round(
+                  (dataSummary.record_bytes + dataSummary.material_bytes) / 1024 / 1024,
+                )} MB
+              </p>
+            ) : null}
+            <div className="flex flex-wrap gap-3 text-xs text-gray-700">
+              {([
+                ['records', '记录与图片'],
+                ['materials', '素材批次与图片'],
+                ['workflows', '工作流历史'],
+                ['taxonomy', '用户分类缓存'],
+                ['exports', '历史导出文件'],
+              ] as const).map(([key, label]) => (
+                <label key={key} className="flex items-center gap-1">
+                  <input
+                    type="checkbox"
+                    checked={dataOptions[key]}
+                    onChange={(event) => setDataOptions((current) => ({
+                      ...current,
+                      [key]: event.target.checked,
+                    }))}
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <input
+                aria-label="清理确认用户名"
+                value={confirmationUsername}
+                onChange={(event) => setConfirmationUsername(event.target.value)}
+                placeholder={`输入 ${detailUser.username} 确认`}
+                className="rounded-lg border border-red-200 bg-white px-3 py-2 text-sm"
+              />
+              <button
+                type="button"
+                onClick={() => void handleResetData()}
+                disabled={
+                  dataBusy ||
+                  confirmationUsername.trim() !== detailUser.username ||
+                  !Object.values(dataOptions).some(Boolean)
+                }
+                className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+              >
+                {dataBusy ? '清理中…' : '执行清理'}
+              </button>
+            </div>
+          </div>
         </section>
       ) : null}
     </div>

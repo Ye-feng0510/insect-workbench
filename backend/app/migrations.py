@@ -16,7 +16,7 @@ from app.config import EXPORTS_DIR, settings
 from app.database import Base
 from app.models import ExcelTemplate, ExportArtifact, ROLE_ADMIN, User
 
-LATEST_SCHEMA_VERSION = 7
+LATEST_SCHEMA_VERSION = 8
 
 
 def _validate_new_admin_credentials(username: str, password: str) -> None:
@@ -400,6 +400,46 @@ def migrate(engine: Engine) -> None:
                     )
                 )
             conn.execute(text("INSERT INTO schema_version(version) VALUES (7)"))
+
+        if 8 not in applied:
+            if "workflow_usages" in existing_tables:
+                conn.execute(text("ALTER TABLE workflow_usages RENAME TO workflow_usages_legacy_v8"))
+                conn.execute(
+                    text(
+                        "CREATE TABLE workflow_usages ("
+                        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                        "owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,"
+                        "record_id INTEGER REFERENCES specimen_records(id) ON DELETE SET NULL,"
+                        "status VARCHAR(20) NOT NULL DEFAULT 'reserved',"
+                        "reserved_at DATETIME DEFAULT CURRENT_TIMESTAMP,"
+                        "charged_at DATETIME,"
+                        "released_at DATETIME,"
+                        "UNIQUE(record_id)"
+                        ")"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "INSERT INTO workflow_usages "
+                        "(id,owner_id,record_id,status,reserved_at,charged_at,released_at) "
+                        "SELECT id,owner_id,record_id,status,reserved_at,charged_at,released_at "
+                        "FROM workflow_usages_legacy_v8"
+                    )
+                )
+                conn.execute(text("DROP TABLE workflow_usages_legacy_v8"))
+                conn.execute(
+                    text(
+                        "CREATE INDEX IF NOT EXISTS ix_workflow_usages_owner_id "
+                        "ON workflow_usages(owner_id)"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "CREATE INDEX IF NOT EXISTS ix_workflow_usages_record_id "
+                        "ON workflow_usages(record_id)"
+                    )
+                )
+            conn.execute(text("INSERT INTO schema_version(version) VALUES (8)"))
 
     # Creates only missing tables; ownership changes above never rely on create_all.
     Base.metadata.create_all(bind=engine)

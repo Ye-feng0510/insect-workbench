@@ -52,6 +52,28 @@ export interface WorkflowUsage {
   released_at: string | null
 }
 
+export interface AdminDataSummary {
+  user_id: number
+  username: string
+  records: number
+  material_batches: number
+  material_items: number
+  workflow_sessions: number
+  taxonomy_cache: number
+  exports: number
+  record_bytes: number
+  material_bytes: number
+  export_bytes: number
+  charged_usage: number
+}
+
+export interface AdminDataResetResult {
+  user_id: number
+  released_bytes: number
+  failed_paths: string[]
+  summary: AdminDataSummary
+}
+
 export interface PromptConfig {
   recognition_prompt: string
   taxonomy_prompt: string

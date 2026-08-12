@@ -9,6 +9,7 @@ import { getCurrentUser, login, logout } from '@/services/auth'
 import {
   getQuotaHistory,
   getUsageHistory,
+  getUserDataSummary,
   listUsers,
   setUserQuota,
 } from '@/services/adminUsers'
@@ -18,7 +19,7 @@ import { checkBackendCompatibility } from '@/services/version'
 import type { AuthUser } from '@/types'
 
 vi.mock('@/services/version', () => ({
-  EXPECTED_BACKEND_VERSION: 'v1.2.1',
+  EXPECTED_BACKEND_VERSION: 'v1.3.0',
   REQUIRED_BACKEND_CAPABILITY: 'agent_workflows_v1',
   checkBackendCompatibility: vi.fn(),
 }))
@@ -37,6 +38,7 @@ vi.mock('@/services/adminUsers', () => ({
   setUserQuota: vi.fn(),
   getQuotaHistory: vi.fn(),
   getUsageHistory: vi.fn(),
+  getUserDataSummary: vi.fn(),
 }))
 
 vi.mock('@/services/settings', () => ({
@@ -100,7 +102,7 @@ describe('frontend authentication and RBAC', () => {
     vi.clearAllMocks()
     vi.mocked(checkBackendCompatibility).mockResolvedValue({
       compatible: true,
-      version: 'v1.2.1',
+      version: 'v1.3.0',
       capabilities: ['agent_workflows_v1'],
     })
     workbenchMounted.mockClear()
@@ -109,6 +111,20 @@ describe('frontend authentication and RBAC', () => {
     vi.mocked(listUsers).mockResolvedValue([adminUser, ordinaryUser])
     vi.mocked(getQuotaHistory).mockResolvedValue([])
     vi.mocked(getUsageHistory).mockResolvedValue([])
+    vi.mocked(getUserDataSummary).mockResolvedValue({
+      user_id: 2,
+      username: 'alice',
+      records: 0,
+      material_batches: 0,
+      material_items: 0,
+      workflow_sessions: 0,
+      taxonomy_cache: 0,
+      exports: 0,
+      record_bytes: 0,
+      material_bytes: 0,
+      export_bytes: 0,
+      charged_usage: 0,
+    })
     vi.mocked(getModelConfig).mockResolvedValue({
       base_url: '',
       api_key: '',

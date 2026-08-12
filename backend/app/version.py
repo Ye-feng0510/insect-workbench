@@ -1,5 +1,5 @@
 """应用版本与前后端兼容能力声明。"""
 
-APP_VERSION = "v1.2.4"
+APP_VERSION = "v1.3.0"
 APP_PRODUCT = "insect-specimen-workbench"
-APP_CAPABILITIES = ("agent_workflows_v1",)
+APP_CAPABILITIES = ("agent_workflows_v1", "admin_user_data_reset_v1")
