@@ -4,6 +4,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
+from starlette.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 
 from app.config import MATERIAL_ZIPS_DIR, settings
@@ -193,7 +194,7 @@ async def next_preview(
             return {
                 "item_id": linked.id,
                 "filename": linked.original_filename,
-                "image_url": f"/api/materials/image/{linked.id}",
+                "image_url": f"/api/materials/image/{linked.id}?variant=preview",
             }
     item = (
         db.query(MaterialItem)
@@ -209,13 +210,14 @@ async def next_preview(
     return {
         "item_id": item.id,
         "filename": item.original_filename,
-        "image_url": f"/api/materials/image/{item.id}",
+        "image_url": f"/api/materials/image/{item.id}?variant=preview",
     }
 
 
 @router.get("/image/{item_id}")
 async def material_image(
     item_id: int,
+    variant: str = Query("original", pattern="^(preview|original)$"),
     ctx: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db),
 ):
@@ -235,6 +237,18 @@ async def material_image(
     image_path = materials_service.resolve_material_image_path(item.stored_path)
     if not image_path.is_file():
         raise HTTPException(status_code=404, detail="素材图片不存在")
+    if variant == "preview":
+        from app.services.image_variant_service import get_preview_path
+
+        try:
+            image_path = await run_in_threadpool(get_preview_path, image_path)
+        except (OSError, ValueError):
+            raise HTTPException(status_code=422, detail="素材图片无法生成预览") from None
+        return FileResponse(
+            str(image_path),
+            media_type="image/webp",
+            headers={"Cache-Control": "private, max-age=86400"},
+        )
     return FileResponse(str(image_path), filename=item.original_filename)
 
 

@@ -11,8 +11,9 @@ import json
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
+from starlette.concurrency import run_in_threadpool
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
@@ -53,6 +54,7 @@ async def get_active_draft(
 @router.get("/{record_id}/image")
 async def get_record_image(
     record_id: int,
+    variant: str = Query("original", pattern="^(preview|original)$"),
     ctx: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db),
 ):
@@ -68,7 +70,19 @@ async def get_record_image(
     )
     if image_path is None:
         raise HTTPException(status_code=404, detail="图片不存在")
-    return FileResponse(str(image_path))
+    if variant == "preview":
+        from app.services.image_variant_service import get_preview_path
+
+        try:
+            image_path = await run_in_threadpool(get_preview_path, image_path)
+        except (OSError, ValueError):
+            raise HTTPException(status_code=422, detail="记录图片无法生成预览") from None
+        return FileResponse(
+            str(image_path),
+            media_type="image/webp",
+            headers={"Cache-Control": "private, max-age=86400"},
+        )
+    return FileResponse(str(image_path), headers={"Cache-Control": "private, max-age=3600"})
 
 
 @router.post("/{record_id}/discard")

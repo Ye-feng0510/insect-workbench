@@ -27,6 +27,7 @@ import {
 import type { MaterialSummary, RecordDetail } from '@/types'
 import ExcelPreview from '@/components/ExcelPreview'
 import AuthenticatedImage from '@/components/AuthenticatedImage'
+import { originalAssetUrl, previewAssetUrl } from '@/services/assets'
 
 interface DraftData {
   recordId: number
@@ -64,6 +65,7 @@ export default function WorkbenchPage() {
   const [prefetchStatus, setPrefetchStatus] = useState<MaterialPrefetchStatus | null>(null)
   const [localImageUrl, setLocalImageUrl] = useState('')
   const [previewOpen, setPreviewOpen] = useState(false)
+  const [showOriginalImage, setShowOriginalImage] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
   const extractionLockRef = useRef(false)
   const editRevisionRef = useRef(0)
@@ -182,7 +184,7 @@ export default function WorkbenchPage() {
       status: detail.status,
       imageFilename: detail.image_filename,
       imagePath: detail.image_path,
-      imageUrl: detail.image_url,
+      imageUrl: previewAssetUrl(detail.image_url),
       rotation: detail.rotation_degrees,
       extracted: {
         ...extracted,
@@ -224,7 +226,7 @@ export default function WorkbenchPage() {
         status: result.status,
         imageFilename: file.name,
         imagePath: '',
-        imageUrl: result.image_url,
+        imageUrl: previewAssetUrl(result.image_url),
         rotation: rot,
         extracted: result.extracted,
         confidence: result.confidence,
@@ -251,6 +253,7 @@ export default function WorkbenchPage() {
     const selectedRotation = rotation
     setQueueLoading(true)
     setExtracting(true)
+    setShowOriginalImage(false)
     try {
       const result = await extractNextMaterial(selectedRotation)
       if (!mountedRef.current) return
@@ -259,7 +262,9 @@ export default function WorkbenchPage() {
         status: result.status,
         imageFilename: result.original_filename,
         imagePath: '',
-        imageUrl: result.image_url,
+        imageUrl: nextMaterialPreview?.item_id === result.material_item_id
+          ? nextMaterialPreview.image_url
+          : previewAssetUrl(result.image_url),
         rotation: selectedRotation,
         extracted: result.extracted,
         confidence: result.confidence,
@@ -303,6 +308,7 @@ export default function WorkbenchPage() {
     const requestRevision = editRevisionRef.current
     extractionLockRef.current = true
     setExtracting(true)
+    setShowOriginalImage(false)
     try {
       const result = await reExtract(draft.recordId, rotation)
       if (!mountedRef.current) return
@@ -313,7 +319,7 @@ export default function WorkbenchPage() {
       setDraft(prev => prev ? {
         ...prev,
         status: result.status,
-        imageUrl: result.image_url,
+        imageUrl: previewAssetUrl(result.image_url),
         rotation,
         extracted: { ...prev.extracted, ...result.extracted },
         confidence: result.confidence,
@@ -409,6 +415,7 @@ export default function WorkbenchPage() {
     setZoom(1)
     setRotation(0)
     setHighlightRow(null)
+    setShowOriginalImage(false)
     fileRef.current?.focus()
   }
 
@@ -475,7 +482,10 @@ export default function WorkbenchPage() {
   const zhongmingEmpty = !draft?.extracted['中名']?.trim()
   const tuxiangEmpty = !draft?.extracted['图像']?.trim()
   const canConfirm = draft?.status === STATUS.AWAITING_CONFIRMATION && !zhongmingEmpty && !tuxiangEmpty && !confirming && !extracting
-  const displayedImageUrl = draft?.imageUrl || nextMaterialPreview?.image_url || ''
+  const displayedPreviewUrl = draft?.imageUrl || nextMaterialPreview?.image_url || ''
+  const displayedImageUrl = showOriginalImage && draft
+    ? originalAssetUrl(`/api/recognition/${draft.recordId}/image`)
+    : displayedPreviewUrl
   const displayedImageName = draft?.imageFilename || nextMaterialPreview?.filename || '标本图片'
 
   if (loading) {
@@ -657,6 +667,13 @@ export default function WorkbenchPage() {
                   title="放大"
                 >
                   <ZoomIn className="h-4 w-4" />
+                </button>
+                <button
+                  onClick={() => setShowOriginalImage((current) => !current)}
+                  className="rounded-md px-2 py-1 text-xs text-gray-500 hover:bg-gray-100"
+                  title="按需加载或关闭原图"
+                >
+                  {showOriginalImage ? '使用预览图' : '查看原图'}
                 </button>
                 <div className="mx-1 h-4 w-px bg-gray-200" />
                 <button

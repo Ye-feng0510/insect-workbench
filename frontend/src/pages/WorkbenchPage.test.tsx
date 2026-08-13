@@ -80,7 +80,7 @@ describe('WorkbenchPage material preview', () => {
     vi.mocked(getNextPreview).mockResolvedValue({
       item_id: 131,
       filename: '131.jpg',
-      image_url: '/api/materials/image/131',
+      image_url: '/api/materials/image/131?variant=preview',
     })
     vi.mocked(getPrefetchStatus).mockResolvedValue({
       ready_count: 0,
@@ -105,7 +105,10 @@ describe('WorkbenchPage material preview', () => {
     )
 
     const image = await screen.findByRole('img', { name: '131.jpg' })
-    expect(image).toHaveAttribute('src', '/api/materials/image/131')
+    expect(image).toHaveAttribute(
+      'src',
+      '/api/materials/image/131?variant=preview',
+    )
 
     fireEvent.click(
       screen.getByRole('button', { name: '开始识别这张素材' }),

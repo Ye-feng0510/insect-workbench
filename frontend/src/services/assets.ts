@@ -27,8 +27,23 @@ function apiRelativeUrl(url: string): string {
 }
 
 export async function fetchAuthenticatedAsset(url: string): Promise<Blob> {
-  const { data } = await api.get<Blob>(apiRelativeUrl(url), { responseType: 'blob' })
+  const { data } = await api.get<Blob>(apiRelativeUrl(url), {
+    responseType: 'blob',
+    timeout: 30_000,
+  })
   return data
+}
+
+export function previewAssetUrl(url: string): string {
+  const parsed = new URL(url, window.location.origin)
+  parsed.searchParams.set('variant', 'preview')
+  return `${parsed.pathname}${parsed.search}`
+}
+
+export function originalAssetUrl(url: string): string {
+  const parsed = new URL(url, window.location.origin)
+  parsed.searchParams.set('variant', 'original')
+  return `${parsed.pathname}${parsed.search}`
 }
 
 export async function downloadAuthenticatedAsset(url: string, filename?: string): Promise<void> {

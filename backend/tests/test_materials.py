@@ -920,7 +920,12 @@ def test_exhausted_quota_preserves_pending_item_and_image_access(
     preview = client.get("/api/materials/next-preview")
     assert preview.status_code == 200
     item_id = preview.json()["item_id"]
+    assert preview.json()["image_url"].endswith("?variant=preview")
     assert client.get(f"/api/materials/image/{item_id}").status_code == 200
+    preview_image = client.get(f"/api/materials/image/{item_id}?variant=preview")
+    assert preview_image.status_code == 200
+    assert preview_image.headers["content-type"].startswith("image/webp")
+    assert "max-age=86400" in preview_image.headers["cache-control"]
 
     exhausted = client.post("/api/materials/next-extract")
     assert exhausted.status_code == 429
@@ -965,4 +970,13 @@ def test_exhausted_quota_preserves_pending_item_and_image_access(
         f"/api/recognition/{resumed.json()['record_id']}/image"
     )
     assert client.get(resumed.json()["image_url"]).status_code == 200
+    record_preview = client.get(
+        f"{resumed.json()['image_url']}?variant=preview"
+    )
+    assert record_preview.status_code == 200
+    assert record_preview.headers["content-type"].startswith("image/webp")
+    assert "max-age=86400" in record_preview.headers["cache-control"]
+    assert client.get(
+        f"{resumed.json()['image_url']}?variant=invalid"
+    ).status_code == 422
 

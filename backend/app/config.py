@@ -15,6 +15,7 @@ MATERIALS_DIR = DATA_DIR / "materials"
 MATERIAL_ZIPS_DIR = MATERIALS_DIR / "zips"
 MATERIAL_IMAGES_DIR = MATERIALS_DIR / "images"
 MATERIAL_EXPORTS_DIR = MATERIALS_DIR / "skipped_exports"
+IMAGE_CACHE_DIR = DATA_DIR / "image_cache"
 DB_PATH = DATA_DIR / "app.db"
 
 # 前端构建产物目录
@@ -96,6 +97,7 @@ def ensure_dirs() -> None:
         MATERIAL_ZIPS_DIR,
         MATERIAL_IMAGES_DIR,
         MATERIAL_EXPORTS_DIR,
+        IMAGE_CACHE_DIR,
         DATA_DIR,
     ):
         d.mkdir(parents=True, exist_ok=True)

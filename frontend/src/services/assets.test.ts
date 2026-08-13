@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import api from './api'
-import { fetchAuthenticatedAsset } from './assets'
+import {
+  fetchAuthenticatedAsset,
+  originalAssetUrl,
+  previewAssetUrl,
+} from './assets'
 
 vi.mock('./api', () => ({
   default: {
@@ -18,7 +22,7 @@ describe('authenticated asset allowlist', () => {
     await fetchAuthenticatedAsset('/api/recognition/image/specimen.jpg')
     expect(api.get).toHaveBeenCalledWith(
       '/recognition/image/specimen.jpg',
-      { responseType: 'blob' },
+      { responseType: 'blob', timeout: 30_000 },
     )
   })
 
@@ -26,7 +30,16 @@ describe('authenticated asset allowlist', () => {
     await fetchAuthenticatedAsset('/api/recognition/501/image')
     expect(api.get).toHaveBeenCalledWith(
       '/recognition/501/image',
-      { responseType: 'blob' },
+      { responseType: 'blob', timeout: 30_000 },
+    )
+  })
+
+  it('switches image variants without changing the resource identity', () => {
+    expect(previewAssetUrl('/api/recognition/501/image')).toBe(
+      '/api/recognition/501/image?variant=preview',
+    )
+    expect(originalAssetUrl('/api/recognition/501/image?variant=preview')).toBe(
+      '/api/recognition/501/image?variant=original',
     )
   })
 

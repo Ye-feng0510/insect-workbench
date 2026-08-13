@@ -15,6 +15,7 @@ data/images/*
 data/processed_images/*
 data/exports/*
 data/materials/*
+data/image_cache/*
 data/*.db
 data/*.db-journal
 data/*.db.backup-*

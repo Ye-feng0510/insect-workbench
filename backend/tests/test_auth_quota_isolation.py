@@ -282,6 +282,9 @@ def test_template_and_image_assets_are_owner_scoped(
         f"/api/recognition/{alice_record_id}/image"
     ).content == b"alice"
     assert client.get(
+        f"/api/recognition/{alice_record_id}/image?variant=preview"
+    ).status_code == 422
+    assert client.get(
         f"/api/records/{alice_record_id}"
     ).json()["image_url"] == f"/api/recognition/{alice_record_id}/image"
     assert client.get(
@@ -290,6 +293,9 @@ def test_template_and_image_assets_are_owner_scoped(
     assert client.get(f"/api/recognition/image/{bob_image.name}").status_code == 404
     assert client.get(
         f"/api/recognition/{bob_record_id}/image"
+    ).status_code == 404
+    assert client.get(
+        f"/api/recognition/{bob_record_id}/image?variant=preview"
     ).status_code == 404
 
     current_images = tmp_path / "current-images"
