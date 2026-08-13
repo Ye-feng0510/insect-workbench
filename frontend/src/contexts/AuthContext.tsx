@@ -181,6 +181,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     configureOwnerHeader(true, ownerId)
   }, [adminUsers, user?.role])
 
+  const clearSelectedOwner = useCallback(() => {
+    if (!user) return
+    setSelectedOwnerId(user.id)
+    sessionStorage.setItem(OWNER_STORAGE_KEY, String(user.id))
+    configureOwnerHeader(user.role === 'admin', user.id)
+  }, [user])
+
   const selectedOwner = adminUsers.find((item) => item.id === selectedOwnerId)
     ?? (user?.id === selectedOwnerId ? user : null)
 
@@ -195,6 +202,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     refreshUser,
     refreshAdminUsers,
     selectOwner,
+    clearSelectedOwner,
   }), [
     adminUsers,
     loading,
@@ -204,6 +212,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     refreshAdminUsers,
     refreshUser,
     selectOwner,
+    clearSelectedOwner,
     selectedOwner,
     selectedOwnerId,
     user,

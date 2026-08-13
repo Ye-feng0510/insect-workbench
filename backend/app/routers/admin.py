@@ -15,7 +15,7 @@ from app.models import (
     WorkflowUsage,
 )
 from app.schemas import QuotaUpdate, UserCreate, UserInfo, UserUpdate
-from app.schemas import AdminDataResetRequest
+from app.schemas import AdminDataResetRequest, AdminUserDeleteRequest
 from app.services import admin_data_service
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -199,3 +199,23 @@ def reset_user_data(
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.delete("/users/{user_id}")
+def delete_user(
+    user_id: int,
+    req: AdminUserDeleteRequest,
+    ctx: AuthContext = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    target = db.get(User, user_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    if req.confirmation_username.strip() != target.username:
+        raise HTTPException(status_code=409, detail="用户名确认不匹配")
+    if req.confirmation_phrase != "DELETE":
+        raise HTTPException(status_code=409, detail="确认词不匹配")
+    try:
+        return admin_data_service.delete_user_account(db, user_id, ctx.user.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc

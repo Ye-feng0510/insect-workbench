@@ -6,6 +6,7 @@ import type {
   WorkflowUsage,
   AdminDataResetResult,
   AdminDataSummary,
+  AdminUserDeleteResult,
 } from '@/types'
 
 function unwrapList<T>(data: T[] | { items: T[] } | { users: T[] }): T[] {
@@ -34,6 +35,20 @@ export async function resetUserData(
     `/admin/users/${userId}/reset-data`,
     { ...options, confirmation_username: confirmationUsername },
   )
+  return data
+}
+
+export async function deleteUserAccount(
+  userId: number,
+  confirmationUsername: string,
+  confirmationPhrase: string,
+): Promise<AdminUserDeleteResult> {
+  const { data } = await api.delete<AdminUserDeleteResult>(`/admin/users/${userId}`, {
+    data: {
+      confirmation_username: confirmationUsername,
+      confirmation_phrase: confirmationPhrase,
+    },
+  })
   return data
 }
 

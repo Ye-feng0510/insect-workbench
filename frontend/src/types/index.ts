@@ -74,6 +74,13 @@ export interface AdminDataResetResult {
   summary: AdminDataSummary
 }
 
+export interface AdminUserDeleteResult {
+  user_id: number
+  username: string
+  released_bytes: number
+  charged_usage_count: number
+}
+
 export interface PromptConfig {
   recognition_prompt: string
   taxonomy_prompt: string

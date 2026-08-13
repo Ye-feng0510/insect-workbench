@@ -526,6 +526,23 @@ class User(Base):
     )
 
 
+class DeletedAccountAudit(Base):
+    """Immutable snapshot retained after a user account is hard-deleted."""
+
+    __tablename__ = "deleted_account_audits"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    username: Mapped[str] = mapped_column(String(100))
+    deleted_user_id: Mapped[int] = mapped_column(Integer)
+    deleted_by_user_id: Mapped[int] = mapped_column(Integer)
+    charged_usage_count: Mapped[int] = mapped_column(Integer, default=0)
+    charged_usage_json: Mapped[str] = mapped_column(Text, default="[]")
+    quota_adjustments_json: Mapped[str] = mapped_column(Text, default="[]")
+    deleted_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp()
+    )
+
+
 class AuthSession(Base):
     __tablename__ = "auth_sessions"
 

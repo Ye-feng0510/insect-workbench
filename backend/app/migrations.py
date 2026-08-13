@@ -16,7 +16,7 @@ from app.config import EXPORTS_DIR, settings
 from app.database import Base
 from app.models import ExcelTemplate, ExportArtifact, ROLE_ADMIN, User
 
-LATEST_SCHEMA_VERSION = 8
+LATEST_SCHEMA_VERSION = 9
 
 
 def _validate_new_admin_credentials(username: str, password: str) -> None:
@@ -440,6 +440,23 @@ def migrate(engine: Engine) -> None:
                     )
                 )
             conn.execute(text("INSERT INTO schema_version(version) VALUES (8)"))
+
+        if 9 not in applied:
+            conn.execute(
+                text(
+                    "CREATE TABLE IF NOT EXISTS deleted_account_audits ("
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                    "username VARCHAR(100) NOT NULL,"
+                    "deleted_user_id INTEGER NOT NULL,"
+                    "deleted_by_user_id INTEGER NOT NULL,"
+                    "charged_usage_count INTEGER NOT NULL DEFAULT 0,"
+                    "charged_usage_json TEXT NOT NULL DEFAULT '[]',"
+                    "quota_adjustments_json TEXT NOT NULL DEFAULT '[]',"
+                    "deleted_at DATETIME DEFAULT CURRENT_TIMESTAMP"
+                    ")"
+                )
+            )
+            conn.execute(text("INSERT INTO schema_version(version) VALUES (9)"))
 
     # Creates only missing tables; ownership changes above never rely on create_all.
     Base.metadata.create_all(bind=engine)

@@ -51,6 +51,7 @@ def auth_env():
     return TestSession
 
 from app.models import (
+    DeletedAccountAudit,
     ExcelTemplate,
     ExportArtifact,
     MaterialBatch,
@@ -62,6 +63,7 @@ from app.models import (
     USAGE_RELEASED,
 )
 from app.services.admin_data_service import get_data_summary, reset_user_data
+from app.services.admin_data_service import delete_user_account
 
 
 def test_admin_reset_preserves_account_templates_and_charged_audit(
@@ -157,3 +159,37 @@ def test_admin_reset_preserves_account_templates_and_charged_audit(
         ).count() == 0
         assert charged_before == 0
         assert get_data_summary(db, 3)["records"] == 1
+
+
+def test_delete_user_account_removes_user_data_and_keeps_audit(
+    auth_env, tmp_path: Path
+):
+    TestSession = auth_env
+    image = tmp_path / "record.jpg"
+    image.write_bytes(b"record")
+    with TestSession() as db:
+        record = db.query(SpecimenRecord).filter_by(owner_id=2).one()
+        record.image_path = str(image)
+        db.add(WorkflowUsage(
+            owner_id=2,
+            record_id=record.id,
+            status=USAGE_CHARGED,
+        ))
+        db.commit()
+        result = delete_user_account(db, 2, 1)
+        assert result["username"] == "alice"
+        assert not image.exists()
+        assert db.get(User, 2) is None
+        assert db.query(SpecimenRecord).filter_by(owner_id=2).count() == 0
+        assert db.query(WorkflowUsage).filter_by(owner_id=2).count() == 0
+        audit = db.query(DeletedAccountAudit).one()
+        assert audit.username == "alice"
+        assert audit.charged_usage_count == 1
+        assert db.get(User, 3) is not None
+
+
+def test_delete_user_account_rejects_current_admin(auth_env):
+    TestSession = auth_env
+    with TestSession() as db:
+        with pytest.raises(ValueError, match="当前管理员"):
+            delete_user_account(db, 1, 1)

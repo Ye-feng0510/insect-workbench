@@ -104,6 +104,11 @@ class AdminDataResetRequest(BaseModel):
     confirmation_username: str = Field(min_length=1, max_length=100)
 
 
+class AdminUserDeleteRequest(BaseModel):
+    confirmation_username: str = Field(min_length=1, max_length=100)
+    confirmation_phrase: str = Field(min_length=1, max_length=20)
+
+
 # ============================================================
 # 设置
 # ============================================================

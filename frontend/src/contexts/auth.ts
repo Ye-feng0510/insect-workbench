@@ -12,6 +12,7 @@ export interface AuthContextValue {
   refreshUser: () => Promise<void>
   refreshAdminUsers: () => Promise<void>
   selectOwner: (ownerId: number) => void
+  clearSelectedOwner: () => void
 }
 
 export const AuthContext = createContext<AuthContextValue | null>(null)

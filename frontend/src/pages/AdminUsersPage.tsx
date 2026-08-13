@@ -13,6 +13,7 @@ import {
   Plus,
   RefreshCw,
   ShieldCheck,
+  Trash2,
   UserRoundCog,
 } from 'lucide-react'
 import { useAuth } from '@/contexts/auth'
@@ -24,6 +25,7 @@ import {
   getUserDataSummary,
   resetUserPassword,
   resetUserData,
+  deleteUserAccount,
   setUserActive,
   setUserQuota,
 } from '@/services/adminUsers'
@@ -41,6 +43,7 @@ export default function AdminUsersPage() {
     adminUsers,
     selectedOwnerId,
     selectOwner,
+    clearSelectedOwner,
     refreshAdminUsers,
   } = useAuth()
   const { show } = useToast()
@@ -66,6 +69,10 @@ export default function AdminUsersPage() {
   })
   const [confirmationUsername, setConfirmationUsername] = useState('')
   const [dataBusy, setDataBusy] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<AuthUser | null>(null)
+  const [deleteUsername, setDeleteUsername] = useState('')
+  const [deletePhrase, setDeletePhrase] = useState('')
+  const [deleteBusy, setDeleteBusy] = useState(false)
   const historyRequestRef = useRef(0)
 
   useEffect(() => {
@@ -209,6 +216,25 @@ export default function AdminUsersPage() {
     }
   }
 
+  const handleDeleteAccount = async () => {
+    if (!deleteTarget || deleteUsername.trim() !== deleteTarget.username || deletePhrase !== 'DELETE') return
+    setDeleteBusy(true)
+    try {
+      const result = await deleteUserAccount(deleteTarget.id, deleteUsername.trim(), deletePhrase)
+      if (selectedOwnerId === deleteTarget.id) clearSelectedOwner()
+      setDeleteTarget(null)
+      setDeleteUsername('')
+      setDeletePhrase('')
+      setDetailUserId(null)
+      await refreshAdminUsers()
+      show(`用户 ${result.username} 已删除`, 'success')
+    } catch (error) {
+      show(extractErrorMessage(error, '删除用户失败'), 'error')
+    } finally {
+      setDeleteBusy(false)
+    }
+  }
+
   return (
     <div className="mx-auto max-w-6xl space-y-6">
       <div>
@@ -328,13 +354,22 @@ export default function AdminUsersPage() {
                         配额与历史
                       </button>
                       {target.id !== user?.id ? (
-                        <button
-                          onClick={() => void handleToggleActive(target)}
-                          disabled={busyUserId === target.id}
-                          className="rounded-md border border-gray-200 px-2 py-1 text-xs text-gray-600 disabled:opacity-40"
-                        >
-                          {target.is_active ? '停用' : '启用'}
-                        </button>
+                        <>
+                          <button
+                            onClick={() => void handleToggleActive(target)}
+                            disabled={busyUserId === target.id}
+                            className="rounded-md border border-gray-200 px-2 py-1 text-xs text-gray-600 disabled:opacity-40"
+                          >
+                            {target.is_active ? '停用' : '启用'}
+                          </button>
+                          <button
+                            onClick={() => setDeleteTarget(target)}
+                            className="flex items-center gap-1 rounded-md border border-red-200 px-2 py-1 text-xs text-red-600"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                            删除账号
+                          </button>
+                        </>
                       ) : null}
                     </div>
                   </td>
@@ -509,6 +544,56 @@ export default function AdminUsersPage() {
             </div>
           </div>
         </section>
+      ) : null}
+      {deleteTarget ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
+            <h3 className="flex items-center gap-2 text-lg font-semibold text-red-700">
+              <Trash2 className="h-5 w-5" />
+              删除用户账号
+            </h3>
+            <p className="mt-3 text-sm leading-6 text-gray-600">
+              将永久删除 <strong>{deleteTarget.username}</strong> 的账号、业务数据和关联文件。
+              已收费审计记录会保留。此操作不可撤销。
+            </p>
+            <div className="mt-4 space-y-3">
+              <input
+                aria-label="删除确认用户名"
+                value={deleteUsername}
+                onChange={(event) => setDeleteUsername(event.target.value)}
+                placeholder={`输入 ${deleteTarget.username}`}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              />
+              <input
+                aria-label="删除确认词"
+                value={deletePhrase}
+                onChange={(event) => setDeletePhrase(event.target.value)}
+                placeholder="输入 DELETE"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              />
+            </div>
+            <div className="mt-5 flex justify-end gap-3">
+              <button
+                onClick={() => setDeleteTarget(null)}
+                disabled={deleteBusy}
+                className="rounded-lg border border-gray-300 px-4 py-2 text-sm text-gray-600"
+              >
+                取消
+              </button>
+              <button
+                onClick={() => void handleDeleteAccount()}
+                disabled={
+                  deleteBusy ||
+                  deleteUsername.trim() !== deleteTarget.username ||
+                  deletePhrase !== 'DELETE'
+                }
+                className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+              >
+                {deleteBusy ? '删除中…' : '确认删除'}
+              </button>
+            </div>
+          </div>
+        </div>
       ) : null}
     </div>
   )

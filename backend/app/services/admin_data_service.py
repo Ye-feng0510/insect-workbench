@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import threading
 import shutil
+import json
 from pathlib import Path
 from typing import Iterable
 from uuid import uuid4
@@ -13,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.config import DATA_DIR
 from app.models import (
     AuthSession,
+    ExcelTemplate,
     ExportArtifact,
     MaterialBatch,
     MaterialItem,
@@ -25,6 +27,8 @@ from app.models import (
     WorkflowUsage,
     User,
     USAGE_CHARGED,
+    QuotaAdjustment,
+    DeletedAccountAudit,
 )
 from app.services import prefetch_service
 
@@ -239,4 +243,164 @@ def reset_user_data(
         "released_bytes": released_bytes,
         "failed_paths": failed_paths,
         "summary": get_data_summary(db, user_id),
+    }
+
+
+def delete_user_account(db: Session, user_id: int, actor_user_id: int) -> dict:
+    user = db.get(User, user_id)
+    actor = db.get(User, actor_user_id)
+    if user is None:
+        raise ValueError("用户不存在")
+    if actor is None or actor.role != "admin":
+        raise ValueError("需要管理员权限")
+    if user.id == actor.id:
+        raise ValueError("不能删除当前管理员")
+    if user.role == "admin":
+        if db.query(User).filter(User.role == "admin", User.is_active.is_(True)).count() <= 1:
+            raise ValueError("不能删除最后一个管理员")
+        raise ValueError("暂不支持删除管理员账号")
+    username = user.username
+    user_id_value = user.id
+
+    record_rows = db.query(SpecimenRecord).filter(SpecimenRecord.owner_id == user_id).all()
+    batch_rows = db.query(MaterialBatch).filter(MaterialBatch.owner_id == user_id).all()
+    export_rows = db.query(ExportArtifact).filter(ExportArtifact.owner_id == user_id).all()
+    paths = _unique_paths(
+        path for row in record_rows for path in (row.image_path, row.processed_image_path)
+    )
+    paths.extend(
+        path for path in _unique_paths(
+            path for row in batch_rows for path in (row.stored_zip_path, row.extract_dir)
+        )
+        if str(path.resolve(strict=False)) not in {str(item.resolve(strict=False)) for item in paths}
+    )
+    paths.extend(
+        path for path in _unique_paths(row.stored_path for row in export_rows)
+        if str(path.resolve(strict=False)) not in {str(item.resolve(strict=False)) for item in paths}
+    )
+    adjustments = db.query(QuotaAdjustment).filter(
+        (QuotaAdjustment.user_id == user_id) | (QuotaAdjustment.actor_user_id == user_id)
+    ).all()
+    charged_count = db.query(WorkflowUsage).filter(
+        WorkflowUsage.owner_id == user_id,
+        WorkflowUsage.status == USAGE_CHARGED,
+    ).count()
+    charged_usage = db.query(WorkflowUsage).filter(
+        WorkflowUsage.owner_id == user_id,
+        WorkflowUsage.status == USAGE_CHARGED,
+    ).all()
+    staged: list[tuple[Path, Path]] = []
+    trash_dir = DATA_DIR / ".admin-account-delete-trash" / uuid4().hex
+    with _reset_lock:
+        prefetch_service.deactivate_owner(user_id)
+        try:
+            trash_dir.mkdir(parents=True, exist_ok=False)
+            for index, path in enumerate(paths):
+                if path.exists():
+                    target = trash_dir / str(index)
+                    shutil.move(str(path), str(target))
+                    staged.append((path, target))
+            db.add(
+                DeletedAccountAudit(
+                    username=username,
+                    deleted_user_id=user_id_value,
+                    deleted_by_user_id=actor.id,
+                    charged_usage_count=charged_count,
+                    charged_usage_json=json.dumps(
+                        [
+                            {
+                                "record_id": row.record_id,
+                                "status": row.status,
+                                "reserved_at": str(row.reserved_at),
+                                "charged_at": str(row.charged_at),
+                            }
+                            for row in charged_usage
+                        ],
+                        ensure_ascii=False,
+                    ),
+                    quota_adjustments_json=json.dumps(
+                        [
+                            {
+                                "user_id": row.user_id,
+                                "actor_user_id": row.actor_user_id,
+                                "old_quota": row.old_quota,
+                                "new_quota": row.new_quota,
+                                "reason": row.reason,
+                                "created_at": str(row.created_at),
+                            }
+                            for row in adjustments
+                        ],
+                        ensure_ascii=False,
+                    ),
+                )
+            )
+            db.query(AuthSession).filter(AuthSession.user_id == user_id).delete(
+                synchronize_session=False
+            )
+            db.query(MaterialPrefetchResult).filter(
+                MaterialPrefetchResult.batch_id.in_([row.id for row in batch_rows])
+            ).delete(synchronize_session=False) if batch_rows else None
+            db.query(MaterialItem).filter(
+                MaterialItem.batch_id.in_([row.id for row in batch_rows])
+            ).delete(synchronize_session=False) if batch_rows else None
+            db.query(MaterialBatch).filter(MaterialBatch.owner_id == user_id).delete(
+                synchronize_session=False
+            )
+            workflow_ids = [
+                row.id for row in db.query(WorkflowSession).filter(
+                    WorkflowSession.owner_id == user_id
+                ).all()
+            ]
+            if workflow_ids:
+                db.query(TaxonomyResolution).filter(
+                    TaxonomyResolution.workflow_id.in_(workflow_ids)
+                ).delete(synchronize_session=False)
+                db.query(WorkflowMessage).filter(
+                    WorkflowMessage.session_id.in_(workflow_ids)
+                ).delete(synchronize_session=False)
+                db.query(WorkflowSession).filter(
+                    WorkflowSession.id.in_(workflow_ids)
+                ).delete(synchronize_session=False)
+            db.query(TaxonomyCache).filter(TaxonomyCache.owner_id == user_id).delete(
+                synchronize_session=False
+            )
+            db.query(SpecimenRecord).filter(SpecimenRecord.owner_id == user_id).delete(
+                synchronize_session=False
+            )
+            db.query(ExcelTemplate).filter(ExcelTemplate.owner_id == user_id).delete(
+                synchronize_session=False
+            )
+            db.query(ExportArtifact).filter(ExportArtifact.owner_id == user_id).delete(
+                synchronize_session=False
+            )
+            db.query(ExportArtifact).filter(
+                ExportArtifact.created_by_user_id == user_id
+            ).update(
+                {ExportArtifact.created_by_user_id: actor.id},
+                synchronize_session=False,
+            )
+            db.query(WorkflowUsage).filter(WorkflowUsage.owner_id == user_id).delete(
+                synchronize_session=False
+            )
+            db.query(QuotaAdjustment).filter(
+                (QuotaAdjustment.user_id == user_id)
+                | (QuotaAdjustment.actor_user_id == user_id)
+            ).delete(synchronize_session=False)
+            db.delete(user)
+            db.commit()
+        except Exception:
+            db.rollback()
+            for original, staged_path in reversed(staged):
+                if staged_path.exists():
+                    original.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(staged_path), str(original))
+            shutil.rmtree(trash_dir, ignore_errors=True)
+            raise
+    released_bytes = sum(_path_size(path) for _, path in staged)
+    shutil.rmtree(trash_dir, ignore_errors=True)
+    return {
+        "user_id": user_id_value,
+        "username": username,
+        "released_bytes": released_bytes,
+        "charged_usage_count": charged_count,
     }
