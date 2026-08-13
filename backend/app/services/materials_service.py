@@ -426,6 +426,38 @@ def get_linked_item(
     return query.order_by(MaterialItem.id.desc()).first()
 
 
+def get_preview_window(
+    db: Session,
+    owner_id: int,
+    after_item_id: int | None = None,
+    limit: int = 1,
+) -> list[MaterialItem]:
+    """Return pending items after the current item without claiming them."""
+    batch = get_active_batch(db, owner_id)
+    if batch is None:
+        return []
+    query = (
+        db.query(MaterialItem)
+        .filter(
+            MaterialItem.batch_id == batch.id,
+            MaterialItem.status == MATERIAL_STATUS_PENDING,
+        )
+    )
+    if after_item_id is not None:
+        current = (
+            db.query(MaterialItem)
+            .filter(
+                MaterialItem.id == after_item_id,
+                MaterialItem.batch_id == batch.id,
+            )
+            .first()
+        )
+        if current is None:
+            raise HTTPException(status_code=404, detail="素材图片不存在")
+        query = query.filter(MaterialItem.sequence > current.sequence)
+    return query.order_by(MaterialItem.sequence.asc()).limit(limit).all()
+
+
 def _copy_for_recognition(item: MaterialItem) -> str:
     source = resolve_material_image_path(item.stored_path)
     if not source.exists():

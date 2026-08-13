@@ -21,6 +21,7 @@ vi.mock('@/services/materials', () => ({
   extractNextMaterial: vi.fn(),
   getMaterialSummary: vi.fn(),
   getNextPreview: vi.fn(),
+  getPreviewWindow: vi.fn(),
   getPrefetchStatus: vi.fn(),
   skipMaterial: vi.fn(),
 }))
@@ -35,11 +36,17 @@ vi.mock('@/components/AuthenticatedImage', () => ({
   ),
 }))
 
+vi.mock('@/services/authenticatedImageCache', () => ({
+  clearAuthenticatedImageCache: vi.fn(),
+  prefetchAuthenticatedImage: vi.fn().mockResolvedValue(new Blob()),
+}))
+
 import { getActiveDraft } from '@/services/draft'
 import {
   extractNextMaterial,
   getMaterialSummary,
   getNextPreview,
+  getPreviewWindow,
   getPrefetchStatus,
 } from '@/services/materials'
 
@@ -81,6 +88,10 @@ describe('WorkbenchPage material preview', () => {
       item_id: 131,
       filename: '131.jpg',
       image_url: '/api/materials/image/131?variant=preview',
+    })
+    vi.mocked(getPreviewWindow).mockResolvedValue({
+      batch_id: 1,
+      items: [],
     })
     vi.mocked(getPrefetchStatus).mockResolvedValue({
       ready_count: 0,

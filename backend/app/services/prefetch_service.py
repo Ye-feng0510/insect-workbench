@@ -438,6 +438,15 @@ class PrefetchWorker:
             result = await recognition_service.recognize_image_with_ocr(
                 client, str(source), prompt, prefetch_rotation
             )
+            from app.services.image_variant_service import get_preview_path
+            try:
+                await asyncio.to_thread(get_preview_path, source)
+            except Exception:
+                logger.warning(
+                    "预览图预热失败 item_id=%s",
+                    item_id,
+                    exc_info=True,
+                )
         except Exception as exc:
             self._mark_failed(pf_id, str(getattr(exc, "detail", exc)))
             return False

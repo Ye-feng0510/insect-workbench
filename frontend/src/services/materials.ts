@@ -3,6 +3,7 @@ import type {
   MaterialExtractResponse,
   MaterialItemInfo,
   MaterialPreview,
+  MaterialPreviewWindow,
   MaterialPrefetchStatus,
   MaterialStatus,
   MaterialSummary,
@@ -84,6 +85,16 @@ export async function getNextPreview(): Promise<MaterialPreview | null> {
     if (status === 404) return null
     throw error
   }
+}
+
+export async function getPreviewWindow(
+  afterItemId: number | undefined,
+  limit = 1,
+): Promise<MaterialPreviewWindow> {
+  const { data } = await api.get<MaterialPreviewWindow>('/materials/preview-window', {
+    params: { after_item_id: afterItemId, limit },
+  })
+  return data
 }
 
 export const skippedMaterialsExportUrl = '/api/materials/skipped/export'

@@ -1,5 +1,5 @@
 import { useEffect, useState, type ImgHTMLAttributes } from 'react'
-import { fetchAuthenticatedAsset } from '@/services/assets'
+import { getAuthenticatedImageBlob } from '@/services/authenticatedImageCache'
 
 interface AuthenticatedImageProps extends Omit<ImgHTMLAttributes<HTMLImageElement>, 'src'> {
   src: string
@@ -24,7 +24,7 @@ export default function AuthenticatedImage({
     }
     let active = true
     let createdUrl = ''
-    fetchAuthenticatedAsset(src)
+    getAuthenticatedImageBlob(src)
       .then((blob) => {
         if (!active) return
         if (!blob.type.startsWith('image/')) {

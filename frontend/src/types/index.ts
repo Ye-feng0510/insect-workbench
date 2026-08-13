@@ -221,6 +221,11 @@ export interface MaterialPreview {
   image_url: string
 }
 
+export interface MaterialPreviewWindow {
+  batch_id: number
+  items: MaterialPreview[]
+}
+
 export interface MaterialPrefetchStatus {
   ready_count: number
   running_count: number

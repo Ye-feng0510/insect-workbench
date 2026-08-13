@@ -369,6 +369,59 @@ def test_material_summary_uses_selected_owner_quota(auth_env):
     assert alice_summary["quota_exhausted"] is True
 
 
+def test_material_preview_window_is_owner_scoped(auth_env):
+    client, TestSession = auth_env
+    with TestSession() as db:
+        alice_batch = MaterialBatch(
+            owner_id=2,
+            original_filename="alice.zip",
+            stored_zip_path="alice.zip",
+            extract_dir="alice",
+            is_active=True,
+        )
+        bob_batch = MaterialBatch(
+            owner_id=3,
+            original_filename="bob.zip",
+            stored_zip_path="bob.zip",
+            extract_dir="bob",
+            is_active=True,
+        )
+        db.add_all([alice_batch, bob_batch])
+        db.flush()
+        db.add_all(
+            [
+                MaterialItem(
+                    batch_id=alice_batch.id,
+                    sequence=1,
+                    original_filename="alice.jpg",
+                    archive_path="alice.jpg",
+                    stored_path="alice.jpg",
+                ),
+                MaterialItem(
+                    batch_id=bob_batch.id,
+                    sequence=1,
+                    original_filename="bob.jpg",
+                    archive_path="bob.jpg",
+                    stored_path="bob.jpg",
+                ),
+            ]
+        )
+        db.commit()
+
+    _login(client, "alice", "alice-password-123")
+    alice_window = client.get("/api/materials/preview-window").json()
+    assert [item["filename"] for item in alice_window["items"]] == ["alice.jpg"]
+    assert client.get(
+        "/api/materials/preview-window", headers={"X-Owner-ID": "3"}
+    ).status_code == 403
+
+    _login(client, "admin", "admin-password-123")
+    bob_window = client.get(
+        "/api/materials/preview-window", headers={"X-Owner-ID": "3"}
+    ).json()
+    assert [item["filename"] for item in bob_window["items"]] == ["bob.jpg"]
+
+
 def test_admin_user_quota_update_is_audited(auth_env):
     client, TestSession = auth_env
     csrf = _login(client, "admin", "admin-password-123")

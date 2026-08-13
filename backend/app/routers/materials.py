@@ -21,6 +21,7 @@ from app.models import (
 from app.schemas import (
     MaterialExtractResponse,
     MaterialItemInfo,
+    MaterialPreviewWindow,
     MaterialSummary,
 )
 from app.services import materials_service
@@ -142,7 +143,7 @@ async def next_extract(
         pending_count=summary_data["pending_count"],
         record_id=record.id,
         status=record.status,
-        image_url=f"/api/recognition/{record.id}/image",
+        image_url=f"/api/materials/image/{item.id}?variant=preview",
         extracted=draft.get("extracted", {}),
         confidence=draft.get("confidence", {}),
         evidence=draft.get("evidence", {}),
@@ -211,6 +212,35 @@ async def next_preview(
         "item_id": item.id,
         "filename": item.original_filename,
         "image_url": f"/api/materials/image/{item.id}?variant=preview",
+    }
+
+
+@router.get("/preview-window", response_model=MaterialPreviewWindow)
+async def preview_window(
+    after_item_id: int | None = Query(None, ge=1),
+    limit: int = Query(1, ge=1, le=3),
+    ctx: AuthContext = Depends(get_auth_context),
+    db: Session = Depends(get_db),
+):
+    batch = materials_service.get_active_batch(db, ctx.owner_id)
+    if batch is None:
+        raise HTTPException(status_code=404, detail="尚未上传数据素材压缩包")
+    items = materials_service.get_preview_window(
+        db,
+        ctx.owner_id,
+        after_item_id=after_item_id,
+        limit=limit,
+    )
+    return {
+        "batch_id": batch.id,
+        "items": [
+            {
+                "item_id": item.id,
+                "filename": item.original_filename,
+                "image_url": f"/api/materials/image/{item.id}?variant=preview",
+            }
+            for item in items
+        ],
     }
 
 

@@ -385,6 +385,17 @@ class MaterialExtractResponse(ExtractResponse):
     pending_count: int
 
 
+class MaterialPreview(BaseModel):
+    item_id: int
+    filename: str
+    image_url: str
+
+
+class MaterialPreviewWindow(BaseModel):
+    batch_id: int
+    items: list[MaterialPreview]
+
+
 # ============================================================
 # Excel 预览与导出
 # ============================================================

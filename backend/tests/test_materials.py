@@ -129,6 +129,33 @@ def test_upload_extracts_images_and_reports_summary(materials_client):
     db.close()
 
 
+def test_preview_window_returns_only_items_after_current_one(materials_client):
+    client, TestSession = materials_client
+    assert upload_zip(
+        client,
+        {
+            "001.jpg": image_bytes(),
+            "002.jpg": image_bytes(),
+            "003.jpg": image_bytes(),
+        },
+    ).status_code == 200
+    items = client.get("/api/materials/items").json()
+
+    window = client.get(
+        f"/api/materials/preview-window?after_item_id={items[0]['id']}&limit=2"
+    )
+
+    assert window.status_code == 200
+    assert [item["item_id"] for item in window.json()["items"]] == [
+        items[1]["id"],
+        items[2]["id"],
+    ]
+    assert window.json()["items"][0]["image_url"] == (
+        f"/api/materials/image/{items[1]['id']}?variant=preview"
+    )
+    assert client.get("/api/materials/preview-window?after_item_id=99999").status_code == 404
+
+
 def test_new_upload_becomes_active_batch(materials_client):
     client, TestSession = materials_client
     assert upload_zip(client, {"old.jpg": image_bytes()}).status_code == 200
@@ -967,11 +994,11 @@ def test_exhausted_quota_preserves_pending_item_and_image_access(
     assert resumed.status_code == 200
     assert resumed.json()["material_item_id"] == item_id
     assert resumed.json()["image_url"] == (
-        f"/api/recognition/{resumed.json()['record_id']}/image"
+        f"/api/materials/image/{item_id}?variant=preview"
     )
     assert client.get(resumed.json()["image_url"]).status_code == 200
     record_preview = client.get(
-        f"{resumed.json()['image_url']}?variant=preview"
+        f"/api/recognition/{resumed.json()['record_id']}/image?variant=preview"
     )
     assert record_preview.status_code == 200
     assert record_preview.headers["content-type"].startswith("image/webp")

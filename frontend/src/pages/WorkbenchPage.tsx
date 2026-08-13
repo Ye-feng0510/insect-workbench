@@ -12,6 +12,7 @@ import {
   extractNextMaterial,
   getMaterialSummary,
   getNextPreview,
+  getPreviewWindow,
   getPrefetchStatus,
   skipMaterial,
   activateClassicWorkbench,
@@ -28,6 +29,10 @@ import type { MaterialSummary, RecordDetail } from '@/types'
 import ExcelPreview from '@/components/ExcelPreview'
 import AuthenticatedImage from '@/components/AuthenticatedImage'
 import { originalAssetUrl, previewAssetUrl } from '@/services/assets'
+import {
+  clearAuthenticatedImageCache,
+  prefetchAuthenticatedImage,
+} from '@/services/authenticatedImageCache'
 
 interface DraftData {
   recordId: number
@@ -105,26 +110,29 @@ export default function WorkbenchPage() {
   }, [])
 
   useEffect(() => {
-    loadDraft()
+    void loadDraft()
     const interval = setInterval(refreshPrefetchStatusCb, 3000)
     return () => clearInterval(interval)
-  }, [refreshPrefetchStatusCb])
+  }, [refreshPrefetchStatusCb]) // loadDraft is stable for this mount
 
   useEffect(() => {
-    if (
-      draft
-      || !materialSummary?.batch
-      || materialSummary.pending_count === 0
-    ) {
+    if (!materialSummary?.batch || materialSummary.pending_count === 0) {
       setNextMaterialPreview(null)
       return
     }
     let active = true
-    getNextPreview()
+    const currentItemId = draft?.materialItemId
+    const previewRequest = currentItemId
+      ? getPreviewWindow(currentItemId, 1).then((window) => window.items[0] ?? null)
+      : getNextPreview()
+    previewRequest
       .then((preview) => {
         if (active) {
           setNextMaterialPreview(preview)
           setImageError('')
+          if (preview) {
+            void prefetchAuthenticatedImage(preview.image_url).catch(() => undefined)
+          }
         }
       })
       .catch((error) => {
@@ -136,7 +144,11 @@ export default function WorkbenchPage() {
     return () => {
       active = false
     }
-  }, [draft, materialSummary?.batch, materialSummary?.pending_count])
+  }, [draft?.materialItemId, materialSummary?.batch, materialSummary?.pending_count])
+
+  useEffect(() => () => {
+    clearAuthenticatedImageCache()
+  }, [])
 
   useEffect(() => {
     if (!materialSummary?.quota_exhausted) return
@@ -168,7 +180,7 @@ export default function WorkbenchPage() {
       }
     }
     setLoading(false)
-    refreshPrefetchStatus()
+    void refreshPrefetchStatus()
   }
 
   const refreshPrefetchStatus = async () => {
@@ -247,10 +259,10 @@ export default function WorkbenchPage() {
     }
   }
 
-  const startNextMaterial = async () => {
+  const startNextMaterial = async (nextRotation = 0) => {
     if (extractionLockRef.current) return
     extractionLockRef.current = true
-    const selectedRotation = rotation
+    const selectedRotation = nextRotation
     setQueueLoading(true)
     setExtracting(true)
     setShowOriginalImage(false)
@@ -349,7 +361,7 @@ export default function WorkbenchPage() {
 
     clearWorkbench()
     void getMaterialSummary().then(setMaterialSummary).catch(() => undefined)
-    await startNextMaterial()
+    await startNextMaterial(0)
   }
 
   const handleConfirm = async () => {
@@ -450,7 +462,7 @@ export default function WorkbenchPage() {
       clearWorkbench()
       show('已跳过当前素材', 'info')
       if (summary.pending_count > 0) {
-        await startNextMaterial()
+        await startNextMaterial(0)
       } else {
         show('当前素材包已处理完毕', 'success')
       }
@@ -553,7 +565,7 @@ export default function WorkbenchPage() {
                       </div>
                     )}
                     <button
-                      onClick={startNextMaterial}
+                      onClick={() => void startNextMaterial(0)}
                       disabled={queueLoading || materialSummary.quota_exhausted}
                       className="flex items-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
                     >
@@ -609,7 +621,7 @@ export default function WorkbenchPage() {
                 )}
                 {!draft && !extracting && (
                   <button
-                    onClick={startNextMaterial}
+                    onClick={() => void startNextMaterial(0)}
                     disabled={queueLoading || materialSummary?.quota_exhausted}
                     className="absolute bottom-4 flex items-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white shadow hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
                   >

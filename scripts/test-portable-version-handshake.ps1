@@ -337,9 +337,9 @@ if (
 
 if (
     $portableBuilderAst.Extent.Text -notmatch
-        '(?m)^\s*\[string\]\$Version\s*=\s*"v1\.3\.1"\s*,?\s*$'
+        '(?m)^\s*\[string\]\$Version\s*=\s*"v1\.3\.2"\s*,?\s*$'
 ) {
-    throw "Portable builder default version is not v1.3.1."
+    throw "Portable builder default version is not v1.3.2."
 }
 $updaterBuilderText = $updaterBuilderAst.Extent.Text
 if (
