@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ToastProvider } from '@/components/Toast'
+import { PetActivityProvider } from '@/features/pet/PetActivityContext'
 import type { MaterialItemInfo, MaterialSummary } from '@/types'
 import type { WorkflowDetail } from '@/services/workflows'
 import AIWorkbenchPage from './AIWorkbenchPage'
@@ -193,9 +194,11 @@ const materialItems: MaterialItemInfo[] = [
 
 function renderPage() {
   return render(
-    <ToastProvider>
-      <AIWorkbenchPage />
-    </ToastProvider>,
+    <PetActivityProvider>
+      <ToastProvider>
+        <AIWorkbenchPage />
+      </ToastProvider>
+    </PetActivityProvider>,
   )
 }
 

@@ -1000,9 +1000,18 @@ function WorkbenchInspector(props: AgentWorkbenchViewProps) {
 export default function AgentWorkbenchView(props: AgentWorkbenchViewProps) {
   const hasDraft = Boolean(props.draft)
   const panelLayout = useAgentPanelLayoutContext()
+  const whaleState = props.extracting
+    ? 'recognizing'
+    : props.resolving
+      ? 'resolving'
+      : props.committing
+        ? 'success'
+        : props.imageError
+          ? 'error'
+          : 'idle'
   return (
     <div
-      className="flex h-screen min-w-0 overflow-hidden bg-[#f6f8f7]"
+      className="dsh-workbench flex h-screen min-w-0 overflow-hidden bg-[#f6f8f7]"
       style={{
         '--agent-inspector-width': `${panelLayout.rightWidth}px`,
       } as CSSProperties}
@@ -1011,9 +1020,10 @@ export default function AgentWorkbenchView(props: AgentWorkbenchViewProps) {
         <header className="flex h-[65px] shrink-0 items-center justify-between gap-4 border-b border-slate-200 bg-white px-5">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-emerald-600 text-white">
-                <Sparkles className="h-4 w-4" />
-              </span>
+              <div className={`dsh-ai-status dsh-ai-status--${whaleState}`} aria-label={`AI 状态：${whaleState}`}>
+                <span className="dsh-ai-status__halo" />
+                <img src="/deepseek-whale.png" alt="" className="dsh-ai-status__mark" />
+              </div>
               <div className="min-w-0">
                 <h1 className="truncate text-sm font-semibold text-slate-900">智能体标本工作台</h1>
                 <p className="truncate text-xs text-slate-400">

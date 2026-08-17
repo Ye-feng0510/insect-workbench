@@ -33,6 +33,8 @@ import {
   clearAuthenticatedImageCache,
   prefetchAuthenticatedImage,
 } from '@/services/authenticatedImageCache'
+import { useReportPetActivity } from '@/features/pet/usePetActivity'
+import type { PetActivity } from '@/features/pet/whalePetAnimation'
 
 interface DraftData {
   recordId: number
@@ -499,6 +501,16 @@ export default function WorkbenchPage() {
     ? originalAssetUrl(`/api/recognition/${draft.recordId}/image`)
     : displayedPreviewUrl
   const displayedImageName = draft?.imageFilename || nextMaterialPreview?.filename || '标本图片'
+  const petActivity: PetActivity = imageError
+    ? 'error'
+    : confirming || skipping
+      ? 'saving'
+      : extracting
+        ? 'extracting'
+        : draft?.status === STATUS.AWAITING_CONFIRMATION
+          ? 'awaiting-confirmation'
+          : 'idle'
+  useReportPetActivity(petActivity)
 
   if (loading) {
     return <Loading />

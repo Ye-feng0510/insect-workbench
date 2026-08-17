@@ -1,8 +1,10 @@
 import { useState, type FormEvent } from 'react'
-import { Loader2, LockKeyhole, Microscope } from 'lucide-react'
+import { ArrowRight, Loader2, LockKeyhole, ShieldCheck } from 'lucide-react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '@/contexts/auth'
 import { extractErrorMessage } from '@/types'
+import OceanBackground from '@/components/brand/OceanBackground'
+import type { LoginScenePhase } from '@/features/login/CinematicLoginScene'
 
 export default function LoginPage() {
   const { login } = useAuth()
@@ -12,6 +14,13 @@ export default function LoginPage() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const scenePhase: LoginScenePhase = error
+    ? 'error'
+    : submitting
+      ? 'submitting'
+      : username || password
+        ? 'editing'
+        : 'idle'
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault()
@@ -29,18 +38,23 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-gray-50 px-4">
-      <div className="w-full max-w-sm rounded-2xl border border-gray-200 bg-white p-8 shadow-sm">
-        <div className="mb-7 flex flex-col items-center">
-          <div className="mb-3 rounded-xl bg-emerald-50 p-3">
-            <Microscope className="h-8 w-8 text-emerald-600" />
+    <OceanBackground phase={scenePhase}>
+      <main className="login-card">
+        <div className="login-card__header">
+          <div className="login-card__brand">
+            <div className="login-card__mark">
+              <img src="/deepseek-whale.png" alt="" />
+            </div>
+            <div>
+              <p className="login-card__kicker">Specimen Lab</p>
+              <h1>昆虫标本工作台</h1>
+            </div>
           </div>
-          <h1 className="text-xl font-semibold text-gray-800">昆虫标本工作台</h1>
-          <p className="mt-1 text-sm text-gray-400">登录后继续使用</p>
+          <p className="login-card__intro">登录智能体工作台，继续你的标本识别与知识归档。</p>
         </div>
-        <form className="space-y-4" onSubmit={handleSubmit}>
+        <form className="login-form" onSubmit={handleSubmit}>
           <div>
-            <label htmlFor="username" className="mb-1 block text-sm font-medium text-gray-600">
+            <label htmlFor="username" className="login-form__label">
               用户名
             </label>
             <input
@@ -50,15 +64,15 @@ export default function LoginPage() {
               onChange={(event) => setUsername(event.target.value)}
               required
               autoFocus
-              className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+              className="login-form__input login-form__input--plain"
             />
           </div>
           <div>
-            <label htmlFor="password" className="mb-1 block text-sm font-medium text-gray-600">
+            <label htmlFor="password" className="login-form__label">
               密码
             </label>
-            <div className="relative">
-              <LockKeyhole className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
+            <div className="login-form__field">
+              <LockKeyhole className="login-form__icon" />
               <input
                 id="password"
                 type="password"
@@ -66,25 +80,31 @@ export default function LoginPage() {
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
                 required
-                className="w-full rounded-lg border border-gray-300 py-2.5 pl-9 pr-3 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                className="login-form__input login-form__input--icon"
               />
             </div>
           </div>
           {error ? (
-            <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">
+            <p role="alert" className="login-form__error">
               {error}
             </p>
           ) : null}
           <button
             type="submit"
+            aria-label="登录"
             disabled={submitting || !username.trim() || !password}
-            className="flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+            className="login-form__submit"
           >
             {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            登录
+            {submitting ? '正在进入工作台…' : '进入智能体工作台'}
+            {!submitting ? <ArrowRight className="h-4 w-4" /> : null}
           </button>
         </form>
-      </div>
-    </main>
+        <div className="login-form__trust">
+          <ShieldCheck />
+          <span>本地会话加密 · 数据归属隔离</span>
+        </div>
+      </main>
+    </OceanBackground>
   )
 }

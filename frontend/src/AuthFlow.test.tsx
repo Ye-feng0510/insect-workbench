@@ -107,6 +107,7 @@ describe('frontend authentication and RBAC', () => {
     })
     workbenchMounted.mockClear()
     sessionStorage.clear()
+    localStorage.clear()
     vi.mocked(logout).mockResolvedValue()
     vi.mocked(listUsers).mockResolvedValue([adminUser, ordinaryUser])
     vi.mocked(getQuotaHistory).mockResolvedValue([])
@@ -139,6 +140,10 @@ describe('frontend authentication and RBAC', () => {
     renderApp('/records')
 
     expect(await screen.findByRole('heading', { name: '昆虫标本工作台' })).toBeInTheDocument()
+    expect(screen.queryByRole('switch')).not.toBeInTheDocument()
+    expect(document.documentElement).not.toHaveAttribute('data-workbench-theme')
+    expect(document.documentElement).not.toHaveClass('workbench-theme-transitioning')
+    expect(document.documentElement).not.toHaveClass('workbench-theme-fallback')
     fireEvent.change(screen.getByLabelText('用户名'), { target: { value: 'worker' } })
     fireEvent.change(screen.getByLabelText('密码'), { target: { value: 'long-password' } })
     fireEvent.click(screen.getByRole('button', { name: '登录' }))
@@ -173,6 +178,44 @@ describe('frontend authentication and RBAC', () => {
     expect(screen.queryByRole('link', { name: '用户管理' })).not.toBeInTheDocument()
     expect(screen.getByText('剩余配额：6')).toBeInTheDocument()
     expect(getModelConfig).not.toHaveBeenCalled()
+  })
+
+  it('switches the authenticated visual theme without remounting route content', async () => {
+    vi.mocked(getCurrentUser).mockReset()
+    setCsrfToken('existing-session')
+    vi.mocked(getCurrentUser).mockResolvedValueOnce(ordinaryUser)
+    renderApp('/agent-workbench')
+
+    expect(await screen.findByRole('heading', { name: '工作台内容' })).toBeInTheDocument()
+    expect(workbenchMounted).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(screen.getByRole('switch', { name: '切换到夜间护眼模式' }))
+
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute('data-workbench-theme', 'night')
+      expect(screen.getByRole('switch')).toHaveAttribute('aria-checked', 'true')
+    })
+    expect(workbenchMounted).toHaveBeenCalledTimes(1)
+  })
+
+  it('removes the authenticated theme state when logging out', async () => {
+    vi.mocked(getCurrentUser).mockReset()
+    setCsrfToken('existing-session')
+    vi.mocked(getCurrentUser).mockResolvedValueOnce(ordinaryUser)
+    renderApp('/agent-workbench')
+
+    expect(await screen.findByRole('heading', { name: '工作台内容' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('switch', { name: '切换到夜间护眼模式' }))
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute('data-workbench-theme', 'night')
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: '退出登录' }))
+
+    expect(await screen.findByRole('heading', { name: '昆虫标本工作台' })).toBeInTheDocument()
+    expect(document.documentElement).not.toHaveAttribute('data-workbench-theme')
+    expect(document.documentElement).not.toHaveClass('workbench-theme-fallback')
+    expect(screen.queryByRole('switch')).not.toBeInTheDocument()
   })
 
   it('guards the settings route from an ordinary user', async () => {

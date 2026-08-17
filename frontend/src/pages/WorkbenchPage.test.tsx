@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ToastProvider } from '@/components/Toast'
+import { PetActivityProvider } from '@/features/pet/PetActivityContext'
 import type { MaterialSummary } from '@/types'
 import WorkbenchPage from './WorkbenchPage'
 
@@ -79,6 +80,16 @@ const exhaustedSummary: MaterialSummary = {
   quota_exhausted: true,
 }
 
+function renderPage() {
+  return render(
+    <PetActivityProvider>
+      <ToastProvider>
+        <WorkbenchPage />
+      </ToastProvider>
+    </PetActivityProvider>,
+  )
+}
+
 describe('WorkbenchPage material preview', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -109,11 +120,7 @@ describe('WorkbenchPage material preview', () => {
       .mockResolvedValueOnce(availableSummary)
       .mockResolvedValue(exhaustedSummary)
 
-    render(
-      <ToastProvider>
-        <WorkbenchPage />
-      </ToastProvider>,
-    )
+    renderPage()
 
     const image = await screen.findByRole('img', { name: '131.jpg' })
     expect(image).toHaveAttribute(
@@ -137,11 +144,7 @@ describe('WorkbenchPage material preview', () => {
   it('shows an explicit quota state without discarding the pending preview', async () => {
     vi.mocked(getMaterialSummary).mockResolvedValue(exhaustedSummary)
 
-    render(
-      <ToastProvider>
-        <WorkbenchPage />
-      </ToastProvider>,
-    )
+    renderPage()
 
     await waitFor(() => {
       expect(screen.getByText(/工作流配额已用尽（已计费 130/)).toBeInTheDocument()

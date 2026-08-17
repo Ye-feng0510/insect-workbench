@@ -1,0 +1,582 @@
+:root {
+  --workbench-canvas: #d0e8f8;
+  --workbench-surface: rgba(244, 248, 253, .68);
+  --workbench-surface-strong: rgba(250, 253, 255, .9);
+  --workbench-surface-muted: rgba(208, 232, 248, .58);
+  --workbench-text: #0a1e4a;
+  --workbench-muted: #6078a0;
+  --workbench-border: rgba(26, 58, 122, .18);
+  --workbench-input: rgba(255, 255, 255, .72);
+  --workbench-accent: #4d8fd4;
+  --workbench-shadow: 0 12px 36px rgba(10, 30, 74, .08);
+}
+
+html[data-workbench-theme='night'] {
+  color-scheme: dark;
+  --workbench-canvas: #07131f;
+  --workbench-surface: rgba(10, 29, 43, .84);
+  --workbench-surface-strong: rgba(12, 34, 50, .94);
+  --workbench-surface-muted: rgba(18, 47, 66, .78);
+  --workbench-text: #d7e6e8;
+  --workbench-muted: #8da8ae;
+  --workbench-border: rgba(126, 181, 190, .22);
+  --workbench-input: rgba(5, 21, 34, .86);
+  --workbench-accent: #68bec4;
+  --workbench-shadow: 0 18px 46px rgba(0, 7, 14, .3);
+}
+
+html.workbench-theme-transitioning::view-transition-old(root),
+html.workbench-theme-transitioning::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+html.workbench-theme-transitioning::view-transition-old(root) {
+  z-index: 1;
+}
+
+html.workbench-theme-transitioning::view-transition-new(root) {
+  z-index: 2;
+  animation: workbench-theme-reveal 780ms cubic-bezier(.22, .76, .2, 1) both;
+}
+
+@keyframes workbench-theme-reveal {
+  from {
+    clip-path: circle(0 at var(--theme-transition-x) var(--theme-transition-y));
+  }
+  to {
+    clip-path: circle(var(--theme-transition-radius) at var(--theme-transition-x) var(--theme-transition-y));
+  }
+}
+
+html.workbench-theme-fallback .dsh-app-shell,
+html.workbench-theme-fallback .dsh-app-shell::before,
+html.workbench-theme-fallback .dsh-app-shell::after,
+html.workbench-theme-fallback .dsh-sidebar,
+html.workbench-theme-fallback .dsh-main,
+html.workbench-theme-fallback .dsh-workbench,
+html.workbench-theme-fallback .dsh-workbench > section > header,
+html.workbench-theme-fallback .dsh-workbench > section > footer,
+html.workbench-theme-fallback .dsh-workbench > aside,
+html.workbench-theme-fallback .dsh-main [class~='bg-white'],
+html.workbench-theme-fallback .dsh-workbench [class~='bg-white'],
+html.workbench-theme-fallback .workbench-theme-toggle,
+html.workbench-theme-fallback .workbench-toast,
+html.workbench-theme-fallback .whale-pet__bubble {
+  transition:
+    color 460ms ease,
+    border-color 460ms ease,
+    background-color 460ms ease,
+    background 460ms ease,
+    box-shadow 460ms ease,
+    opacity 460ms ease;
+}
+
+.workbench-theme-toggle {
+  position: relative;
+  display: grid;
+  width: 2.65rem;
+  height: 2.65rem;
+  flex: none;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid rgba(38, 84, 139, .2);
+  border-radius: 999px;
+  color: #28588c;
+  background:
+    radial-gradient(circle at 34% 28%, rgba(255, 255, 255, .96), transparent 36%),
+    rgba(218, 237, 248, .82);
+  box-shadow:
+    0 8px 20px rgba(10, 30, 74, .12),
+    inset 0 1px rgba(255, 255, 255, .78);
+  cursor: pointer;
+  transition: transform 180ms ease, color 260ms ease, border-color 260ms ease, background 260ms ease, box-shadow 260ms ease;
+}
+
+.workbench-theme-toggle:hover:not(:disabled) {
+  transform: translateY(-2px) scale(1.04);
+  border-color: rgba(77, 143, 212, .42);
+  box-shadow:
+    0 11px 24px rgba(10, 30, 74, .16),
+    0 0 0 4px rgba(77, 143, 212, .08);
+}
+
+.workbench-theme-toggle:focus-visible {
+  outline: 2px solid var(--workbench-accent);
+  outline-offset: 3px;
+}
+
+.workbench-theme-toggle:disabled {
+  cursor: wait;
+}
+
+.workbench-theme-toggle__halo {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  border: 1px solid currentColor;
+  border-radius: inherit;
+  opacity: 0;
+}
+
+.workbench-theme-toggle[data-transitioning='true'] .workbench-theme-toggle__halo {
+  animation: workbench-theme-toggle-halo 780ms ease-out;
+}
+
+.workbench-theme-toggle__icon {
+  position: absolute;
+  width: 1.15rem;
+  height: 1.15rem;
+  transition: opacity 300ms ease, rotate 500ms cubic-bezier(.22, .76, .2, 1), scale 300ms ease;
+}
+
+.workbench-theme-toggle__icon--sun {
+  opacity: 1;
+  rotate: 0deg;
+  scale: 1;
+}
+
+.workbench-theme-toggle__icon--moon {
+  opacity: 0;
+  rotate: -75deg;
+  scale: .45;
+}
+
+.workbench-theme-toggle[data-theme='night'] .workbench-theme-toggle__icon--sun {
+  opacity: 0;
+  rotate: 90deg;
+  scale: .45;
+}
+
+.workbench-theme-toggle[data-theme='night'] .workbench-theme-toggle__icon--moon {
+  opacity: 1;
+  rotate: 0deg;
+  scale: 1;
+}
+
+@keyframes workbench-theme-toggle-halo {
+  from {
+    opacity: .62;
+    transform: scale(.5);
+  }
+  to {
+    opacity: 0;
+    transform: scale(2.2);
+  }
+}
+
+html[data-workbench-theme='night'] body {
+  background: var(--workbench-canvas);
+  color: var(--workbench-text);
+}
+
+html[data-workbench-theme='night'] ::selection {
+  color: #e4f3f4;
+  background: rgba(88, 179, 186, .3);
+}
+
+html[data-workbench-theme='night'] .dsh-app-shell {
+  color: var(--workbench-text) !important;
+  background: var(--workbench-canvas) !important;
+}
+
+html[data-workbench-theme='night'] .dsh-app-shell::before {
+  background:
+    linear-gradient(180deg, rgba(4, 13, 23, .74), rgba(4, 16, 27, .84)),
+    url('/whale-song.webp') center / cover fixed;
+  filter: saturate(.62) brightness(.62);
+}
+
+html[data-workbench-theme='night'] .dsh-app-shell::after {
+  background:
+    radial-gradient(circle at 70% 9%, rgba(98, 172, 181, .09), transparent 29%),
+    linear-gradient(90deg, rgba(2, 11, 20, .24), rgba(5, 22, 34, .1));
+}
+
+html[data-workbench-theme='night'] .dsh-sidebar {
+  color: var(--workbench-text) !important;
+  border-color: var(--workbench-border) !important;
+  background: rgba(6, 22, 34, .9) !important;
+  box-shadow: 12px 0 36px rgba(0, 7, 14, .24) !important;
+}
+
+html[data-workbench-theme='night'] .dsh-sidebar > div,
+html[data-workbench-theme='night'] .dsh-sidebar nav {
+  border-color: rgba(126, 181, 190, .14) !important;
+}
+
+html[data-workbench-theme='night'] .dsh-sidebar .text-white,
+html[data-workbench-theme='night'] .dsh-sidebar .text-cyan-50 {
+  color: #dcebed !important;
+}
+
+html[data-workbench-theme='night'] .dsh-sidebar .text-cyan-100\/65,
+html[data-workbench-theme='night'] .dsh-sidebar .text-cyan-100\/45,
+html[data-workbench-theme='night'] .dsh-sidebar .text-cyan-100\/40,
+html[data-workbench-theme='night'] .dsh-sidebar .text-cyan-200\/55,
+html[data-workbench-theme='night'] .dsh-sidebar .text-cyan-200\/75 {
+  color: var(--workbench-muted) !important;
+}
+
+html[data-workbench-theme='night'] .dsh-sidebar .text-teal-200,
+html[data-workbench-theme='night'] .dsh-sidebar .text-teal-300 {
+  color: #77c4aa !important;
+}
+
+html[data-workbench-theme='night'] .dsh-sidebar a[aria-current='page'] {
+  color: #e2f1f2 !important;
+  background: rgba(68, 135, 145, .22) !important;
+  box-shadow: inset 3px 0 #68bec4, 0 8px 22px rgba(0, 9, 18, .2) !important;
+}
+
+html[data-workbench-theme='night'] .dsh-sidebar nav a:not([aria-current='page']):hover {
+  color: #e2f1f2 !important;
+  background: rgba(91, 148, 157, .12) !important;
+}
+
+html[data-workbench-theme='night'] .dsh-sidebar select,
+html[data-workbench-theme='night'] .dsh-sidebar option {
+  color: var(--workbench-text) !important;
+  border-color: var(--workbench-border) !important;
+  background: #0c2537 !important;
+}
+
+html[data-workbench-theme='night'] .dsh-brand-mark {
+  border-color: rgba(146, 207, 212, .24);
+  background: linear-gradient(145deg, rgba(28, 64, 79, .92), rgba(10, 35, 50, .82));
+  box-shadow: 0 8px 24px rgba(0, 7, 14, .28), inset 0 1px rgba(206, 242, 244, .12);
+}
+
+html[data-workbench-theme='night'] .workbench-theme-toggle {
+  color: #a8dce0;
+  border-color: rgba(112, 189, 196, .26);
+  background:
+    radial-gradient(circle at 32% 28%, rgba(117, 188, 195, .18), transparent 38%),
+    rgba(10, 36, 51, .92);
+  box-shadow:
+    0 9px 22px rgba(0, 7, 14, .3),
+    inset 0 1px rgba(196, 235, 238, .12);
+}
+
+html[data-workbench-theme='night'] .dsh-main {
+  color: var(--workbench-text);
+  background: rgba(4, 17, 28, .5) !important;
+}
+
+html[data-workbench-theme='night'] .dsh-workbench {
+  color: var(--workbench-text);
+  background: rgba(4, 17, 28, .58) !important;
+}
+
+html[data-workbench-theme='night'] .dsh-workbench > section > header,
+html[data-workbench-theme='night'] .dsh-workbench > section > footer,
+html[data-workbench-theme='night'] .dsh-workbench > aside {
+  border-color: var(--workbench-border) !important;
+  background: rgba(8, 27, 41, .9) !important;
+  box-shadow: 0 8px 28px rgba(0, 7, 14, .22);
+}
+
+html[data-workbench-theme='night'] .dsh-workbench main {
+  background:
+    radial-gradient(circle at 62% 30%, rgba(92, 161, 169, .07), transparent 32%),
+    rgba(4, 18, 29, .58);
+}
+
+html[data-workbench-theme='night'] .dsh-main [class~='bg-white'],
+html[data-workbench-theme='night'] .dsh-main [class~='bg-white\/80'],
+html[data-workbench-theme='night'] .dsh-main [class~='bg-white\/95'],
+html[data-workbench-theme='night'] .dsh-main [class~='bg-white\/75'],
+html[data-workbench-theme='night'] .dsh-main [class~='bg-gray-50'],
+html[data-workbench-theme='night'] .dsh-main [class~='bg-gray-100'],
+html[data-workbench-theme='night'] .dsh-main [class~='bg-slate-50'],
+html[data-workbench-theme='night'] .dsh-main [class~='bg-slate-100'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='bg-white'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='bg-white\/75'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='bg-slate-50'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='bg-slate-100'] {
+  color: var(--workbench-text) !important;
+  border-color: var(--workbench-border) !important;
+  background: var(--workbench-surface) !important;
+  box-shadow: var(--workbench-shadow);
+}
+
+html[data-workbench-theme='night'] .dsh-main [class~='border-gray-100'],
+html[data-workbench-theme='night'] .dsh-main [class~='border-gray-200'],
+html[data-workbench-theme='night'] .dsh-main [class~='border-gray-300'],
+html[data-workbench-theme='night'] .dsh-main [class~='border-slate-100'],
+html[data-workbench-theme='night'] .dsh-main [class~='border-slate-200'],
+html[data-workbench-theme='night'] .dsh-main [class~='border-slate-300'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='border-slate-100'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='border-slate-200'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='border-slate-300'] {
+  border-color: var(--workbench-border) !important;
+}
+
+html[data-workbench-theme='night'] .dsh-main [class~='text-gray-900'],
+html[data-workbench-theme='night'] .dsh-main [class~='text-gray-800'],
+html[data-workbench-theme='night'] .dsh-main [class~='text-gray-700'],
+html[data-workbench-theme='night'] .dsh-main [class~='text-slate-900'],
+html[data-workbench-theme='night'] .dsh-main [class~='text-slate-800'],
+html[data-workbench-theme='night'] .dsh-main [class~='text-slate-700'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='text-slate-900'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='text-slate-800'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='text-slate-700'] {
+  color: var(--workbench-text) !important;
+}
+
+html[data-workbench-theme='night'] .dsh-main [class~='text-gray-600'],
+html[data-workbench-theme='night'] .dsh-main [class~='text-gray-500'],
+html[data-workbench-theme='night'] .dsh-main [class~='text-gray-400'],
+html[data-workbench-theme='night'] .dsh-main [class~='text-slate-600'],
+html[data-workbench-theme='night'] .dsh-main [class~='text-slate-500'],
+html[data-workbench-theme='night'] .dsh-main [class~='text-slate-400'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='text-slate-600'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='text-slate-500'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='text-slate-400'] {
+  color: var(--workbench-muted) !important;
+}
+
+html[data-workbench-theme='night'] .dsh-main input,
+html[data-workbench-theme='night'] .dsh-main textarea,
+html[data-workbench-theme='night'] .dsh-main select,
+html[data-workbench-theme='night'] .dsh-workbench input,
+html[data-workbench-theme='night'] .dsh-workbench textarea,
+html[data-workbench-theme='night'] .dsh-workbench select {
+  color: var(--workbench-text) !important;
+  border-color: var(--workbench-border) !important;
+  background: var(--workbench-input) !important;
+}
+
+html[data-workbench-theme='night'] .dsh-main input::placeholder,
+html[data-workbench-theme='night'] .dsh-main textarea::placeholder,
+html[data-workbench-theme='night'] .dsh-workbench input::placeholder,
+html[data-workbench-theme='night'] .dsh-workbench textarea::placeholder {
+  color: #6f8e96 !important;
+}
+
+html[data-workbench-theme='night'] .dsh-main input:focus,
+html[data-workbench-theme='night'] .dsh-main textarea:focus,
+html[data-workbench-theme='night'] .dsh-main select:focus,
+html[data-workbench-theme='night'] .dsh-workbench input:focus,
+html[data-workbench-theme='night'] .dsh-workbench textarea:focus,
+html[data-workbench-theme='night'] .dsh-workbench select:focus {
+  border-color: var(--workbench-accent) !important;
+  box-shadow: 0 0 0 3px rgba(104, 190, 196, .13) !important;
+}
+
+html[data-workbench-theme='night'] .dsh-main table thead,
+html[data-workbench-theme='night'] .dsh-main [class~='bg-gray-50'] {
+  background: var(--workbench-surface-muted) !important;
+}
+
+html[data-workbench-theme='night'] .dsh-main [class~='hover\:bg-gray-50']:hover,
+html[data-workbench-theme='night'] .dsh-main [class~='hover\:bg-gray-100']:hover,
+html[data-workbench-theme='night'] .dsh-workbench [class~='hover\:bg-slate-50']:hover,
+html[data-workbench-theme='night'] .dsh-workbench [class~='hover\:bg-slate-100']:hover {
+  background: rgba(63, 113, 123, .18) !important;
+}
+
+html[data-workbench-theme='night'] .dsh-main [class~='bg-emerald-50'],
+html[data-workbench-theme='night'] .dsh-main [class~='bg-emerald-50\/30'],
+html[data-workbench-theme='night'] .dsh-main [class~='bg-emerald-50\/40'],
+html[data-workbench-theme='night'] .dsh-main [class~='bg-emerald-50\/50'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='bg-emerald-50'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='bg-emerald-50\/30'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='bg-emerald-50\/40'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='bg-emerald-50\/50'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='bg-emerald-100'] {
+  background: rgba(40, 116, 91, .2) !important;
+}
+
+html[data-workbench-theme='night'] .dsh-main [class~='bg-yellow-50'],
+html[data-workbench-theme='night'] .dsh-main [class~='bg-yellow-100'],
+html[data-workbench-theme='night'] .dsh-main [class~='bg-amber-50'],
+html[data-workbench-theme='night'] .dsh-main [class~='bg-amber-100'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='bg-amber-50'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='bg-amber-100'] {
+  background: rgba(143, 111, 45, .2) !important;
+}
+
+html[data-workbench-theme='night'] .dsh-main [class~='bg-red-50'],
+html[data-workbench-theme='night'] .dsh-main [class~='bg-red-50\/50'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='bg-red-50'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='bg-red-50\/50'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='bg-red-100'] {
+  background: rgba(143, 63, 68, .2) !important;
+}
+
+html[data-workbench-theme='night'] .dsh-main [class~='bg-blue-50'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='bg-blue-50'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='bg-blue-100'] {
+  background: rgba(51, 102, 142, .2) !important;
+}
+
+html[data-workbench-theme='night'] .dsh-main [class~='text-emerald-600'],
+html[data-workbench-theme='night'] .dsh-main [class~='text-emerald-700'],
+html[data-workbench-theme='night'] .dsh-main [class~='text-emerald-800'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='text-emerald-600'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='text-emerald-700'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='text-emerald-800'] {
+  color: #82c9ae !important;
+}
+
+html[data-workbench-theme='night'] .dsh-main [class~='text-red-500'],
+html[data-workbench-theme='night'] .dsh-main [class~='text-red-600'],
+html[data-workbench-theme='night'] .dsh-main [class~='text-red-700'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='text-red-500'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='text-red-600'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='text-red-700'] {
+  color: #e7a0a6 !important;
+}
+
+html[data-workbench-theme='night'] .dsh-main [class~='text-blue-500'],
+html[data-workbench-theme='night'] .dsh-main [class~='text-blue-600'],
+html[data-workbench-theme='night'] .dsh-main [class~='text-blue-700'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='text-blue-500'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='text-blue-600'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='text-blue-700'] {
+  color: #8bbbd3 !important;
+}
+
+html[data-workbench-theme='night'] .dsh-main [class~='text-yellow-600'],
+html[data-workbench-theme='night'] .dsh-main [class~='text-yellow-700'],
+html[data-workbench-theme='night'] .dsh-main [class~='text-amber-500'],
+html[data-workbench-theme='night'] .dsh-main [class~='text-amber-600'],
+html[data-workbench-theme='night'] .dsh-main [class~='text-amber-700'],
+html[data-workbench-theme='night'] .dsh-main [class~='text-amber-800'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='text-amber-500'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='text-amber-600'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='text-amber-700'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='text-amber-800'] {
+  color: #d9bd79 !important;
+}
+
+html[data-workbench-theme='night'] .dsh-main [class~='border-amber-200'],
+html[data-workbench-theme='night'] .dsh-main [class~='border-amber-300'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='border-amber-200'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='border-amber-300'] {
+  border-color: rgba(205, 169, 92, .34) !important;
+}
+
+html[data-workbench-theme='night'] .dsh-main [class~='hover\:bg-amber-50']:hover,
+html[data-workbench-theme='night'] .dsh-workbench [class~='hover\:bg-amber-50']:hover {
+  background: rgba(157, 121, 47, .26) !important;
+}
+
+html[data-workbench-theme='night'] .dsh-main [class~='bg-amber-500'],
+html[data-workbench-theme='night'] .dsh-main [class~='bg-amber-600'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='bg-amber-500'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='bg-amber-600'] {
+  background: linear-gradient(135deg, #775d2d, #97773b) !important;
+}
+
+html[data-workbench-theme='night'] .dsh-main [class~='bg-purple-100'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='bg-purple-100'] {
+  background: rgba(103, 80, 142, .22) !important;
+}
+
+html[data-workbench-theme='night'] .dsh-main [class~='text-purple-600'],
+html[data-workbench-theme='night'] .dsh-main [class~='text-purple-700'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='text-purple-600'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='text-purple-700'] {
+  color: #bea8df !important;
+}
+
+html[data-workbench-theme='night'] .dsh-main [class~='bg-emerald-600'],
+html[data-workbench-theme='night'] .dsh-main [class~='bg-blue-600'],
+html[data-workbench-theme='night'] .dsh-main [class~='bg-violet-600'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='bg-emerald-600'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='bg-blue-600'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='bg-violet-600'] {
+  background: linear-gradient(135deg, #256f75, #3b8f96) !important;
+}
+
+html[data-workbench-theme='night'] .dsh-main [class~='bg-slate-950'],
+html[data-workbench-theme='night'] .dsh-workbench [class~='bg-slate-950'] {
+  background: rgba(2, 12, 21, .95) !important;
+}
+
+html[data-workbench-theme='night'] .dsh-app-shell [role='dialog'] {
+  color: var(--workbench-text) !important;
+  border-color: var(--workbench-border) !important;
+  background: var(--workbench-surface-strong) !important;
+  box-shadow: 0 28px 80px rgba(0, 5, 10, .46) !important;
+}
+
+html[data-workbench-theme='night'] .dsh-ai-status {
+  border-color: var(--workbench-border);
+  background: rgba(13, 39, 54, .9);
+  box-shadow: 0 8px 24px rgba(0, 7, 14, .24);
+}
+
+html[data-workbench-theme='night'] .dsh-app-shell ::-webkit-scrollbar-track {
+  background: rgba(6, 23, 35, .5);
+}
+
+html[data-workbench-theme='night'] .dsh-app-shell ::-webkit-scrollbar-thumb {
+  background: rgba(87, 151, 159, .48);
+  background-clip: padding-box;
+}
+
+html[data-workbench-theme='night'] .rdg-light {
+  color-scheme: dark;
+  --rdg-color: #d7e6e8;
+  --rdg-border-color: rgba(126, 181, 190, .2);
+  --rdg-summary-border-color: rgba(126, 181, 190, .32);
+  --rdg-background-color: #0a2131;
+  --rdg-header-background-color: #102c3e;
+  --rdg-header-draggable-background-color: #17394c;
+  --rdg-row-hover-background-color: #123245;
+  --rdg-row-selected-background-color: #194a5b;
+  --rdg-row-selected-hover-background-color: #1d5668;
+  --rdg-selection-color: #68bec4;
+  --rdg-checkbox-focus-color: #83d5da;
+}
+
+html[data-workbench-theme='night'] .workbench-toast--info {
+  color: #dcebed !important;
+  background: #163747 !important;
+}
+
+html[data-workbench-theme='night'] .workbench-toast--success {
+  background: #236953 !important;
+}
+
+html[data-workbench-theme='night'] .workbench-toast--error {
+  background: #7c343d !important;
+}
+
+html[data-workbench-theme='night'] .whale-pet__sprite {
+  filter: drop-shadow(0 12px 16px rgba(0, 7, 14, .42));
+}
+
+html[data-workbench-theme='night'] .whale-pet__shadow {
+  background: rgba(0, 7, 14, .38);
+}
+
+html[data-workbench-theme='night'] .whale-pet__bubble {
+  color: #d5e7e9;
+  border-color: rgba(112, 189, 196, .26);
+  background: rgba(9, 31, 45, .92);
+  box-shadow: 0 12px 30px rgba(0, 7, 14, .36);
+}
+
+html[data-workbench-theme='night'] .whale-pet--error .whale-pet__bubble {
+  color: #f0b4b8;
+  border-color: rgba(218, 113, 121, .4);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html.workbench-theme-transitioning::view-transition-new(root) {
+    animation-duration: .01ms;
+  }
+
+  html.workbench-theme-fallback .dsh-app-shell,
+  html.workbench-theme-fallback .dsh-app-shell *,
+  .workbench-theme-toggle,
+  .workbench-theme-toggle__icon,
+  .workbench-theme-toggle__halo {
+    animation: none !important;
+    transition: none !important;
+  }
+}

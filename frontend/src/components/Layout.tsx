@@ -16,6 +16,10 @@ import { getModelConfig } from '@/services/settings'
 import { getCurrentTemplate } from '@/services/templates'
 import { useAuth } from '@/contexts/auth'
 import PanelResizeHandle from '@/features/workbench/PanelResizeHandle'
+import FloatingWhalePet from '@/features/pet/FloatingWhalePet'
+import { PetActivityProvider } from '@/features/pet/PetActivityContext'
+import ThemeToggle from '@/features/theme/ThemeToggle'
+import { WorkbenchThemeProvider } from '@/features/theme/WorkbenchThemeProvider'
 import {
   AgentPanelLayoutContext,
   isAgentWorkbenchPath,
@@ -39,11 +43,11 @@ function StatusBadge({ ok, label }: StatusBadgeProps) {
   return (
     <span className="flex items-center gap-1">
       {ok ? (
-        <CheckCircle className="h-3 w-3 text-emerald-500" />
+        <CheckCircle className="h-3 w-3 text-teal-300" />
       ) : (
-        <XCircle className="h-3 w-3 text-gray-300" />
+        <XCircle className="h-3 w-3 text-cyan-100/35" />
       )}
-      <span className={ok ? 'text-emerald-600' : 'text-gray-400'}>{label}</span>
+      <span className={ok ? 'text-teal-200' : 'text-cyan-100/45'}>{label}</span>
     </span>
   )
 }
@@ -55,6 +59,7 @@ export interface LayoutOutletContext {
 export default function Layout() {
   const location = useLocation()
   const isAgentWorkbench = isAgentWorkbenchPath(location.pathname)
+  const isWorkbenchRoute = isAgentWorkbench || location.pathname.startsWith('/workbench')
   const agentPanelLayout = useAgentPanelLayout()
   const {
     user,
@@ -102,50 +107,57 @@ export default function Layout() {
     : businessNavItems
 
   return (
+    <WorkbenchThemeProvider>
+    <PetActivityProvider>
     <AgentPanelLayoutContext.Provider value={agentPanelLayout}>
     <div
       ref={agentPanelLayout.containerRef}
-      className="flex h-screen bg-gray-50 text-gray-800"
+      className="dsh-app-shell flex h-screen bg-[#f3f7f7] text-[#102c3d]"
     >
       <aside
         id="agent-navigation-panel"
         style={isAgentWorkbench ? { width: agentPanelLayout.leftWidth } : undefined}
-        className={`flex shrink-0 flex-col border-r border-gray-200 bg-white ${
+        className={`dsh-sidebar flex shrink-0 flex-col border-r border-[#183c4d] bg-[#092b40] text-white shadow-[12px_0_40px_rgba(10,39,56,0.08)] ${
           isAgentWorkbench ? '' : 'w-60'
         }`}
       >
-        <div className="flex items-center gap-2 border-b border-gray-200 px-5 py-4">
-          <Microscope className="h-6 w-6 text-emerald-600" />
-          <span className="text-base font-semibold">昆虫标本工作台</span>
+        <div className="flex items-center gap-3 border-b border-white/10 px-5 py-5">
+          <div className="dsh-brand-mark flex h-10 w-10 items-center justify-center rounded-2xl">
+            <img src="/deepseek-whale.png" alt="" className="h-6 w-6" />
+          </div>
+          <div className="min-w-0">
+            <span className="block truncate text-sm font-bold tracking-wide">昆虫标本工作台</span>
+            <span className="mt-0.5 block text-[10px] uppercase tracking-[.18em] text-cyan-200/55">Specimen Intelligence</span>
+          </div>
         </div>
-        <nav className="flex flex-1 flex-col gap-1 p-3">
+        <nav className="flex flex-1 flex-col gap-1.5 p-3">
           {navItems.map(({ to, label, icon: Icon }) => (
             <NavLink
               key={to}
               to={to}
               className={({ isActive }) =>
-                `flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors ${
+                `group relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-all ${
                   isActive
-                    ? 'bg-emerald-50 font-medium text-emerald-700'
-                    : 'text-gray-600 hover:bg-gray-100'
+                    ? 'bg-white/12 font-semibold text-white shadow-inner shadow-white/5'
+                    : 'text-cyan-100/65 hover:bg-white/8 hover:text-white'
                 }`
               }
             >
-              <Icon className="h-4 w-4" />
+              <Icon className="h-4 w-4 opacity-80 transition group-hover:opacity-100" />
               {label}
             </NavLink>
           ))}
         </nav>
         {user?.role === 'admin' ? (
-          <div className="border-t border-gray-200 px-4 py-3">
-            <label htmlFor="owner-context" className="mb-1 block text-xs font-medium text-gray-500">
+          <div className="border-t border-white/10 px-4 py-4">
+            <label htmlFor="owner-context" className="mb-2 block text-[10px] font-semibold uppercase tracking-[.13em] text-cyan-100/45">
               当前数据所有者
             </label>
             <select
               id="owner-context"
               value={selectedOwnerId ?? user.id}
               onChange={(event) => selectOwner(Number(event.target.value))}
-              className="w-full rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-xs font-medium text-emerald-700"
+              className="w-full rounded-xl border border-cyan-200/15 bg-white/8 px-2.5 py-2 text-xs font-medium text-cyan-50 outline-none focus:border-cyan-200/40 focus:ring-2 focus:ring-cyan-200/10"
             >
               {adminUsers.length > 0 ? adminUsers.map((owner) => (
                 <option key={owner.id} value={owner.id} disabled={!owner.is_active}>
@@ -155,18 +167,18 @@ export default function Layout() {
                 <option value={user.id}>{user.username}（我）</option>
               )}
             </select>
-            <p className="mt-1 truncate text-xs text-gray-400">
+            <p className="mt-2 truncate text-[11px] text-cyan-100/40">
               正在管理：{selectedOwner?.username ?? user.username}
             </p>
           </div>
         ) : null}
-        <div className="space-y-1.5 border-t border-gray-200 px-5 py-3 text-xs">
+        <div className="space-y-2 border-t border-white/10 px-5 py-4 text-xs">
           <StatusBadge ok={templateConfigured} label="Excel 模板" />
           {user?.role === 'admin' ? <StatusBadge ok={modelConfigured} label="模型 API" /> : null}
           {!templateConfigured ? (
             <NavLink
               to="/export"
-              className="mt-1 block text-xs text-blue-500 hover:underline"
+              className="mt-1 block text-xs text-cyan-200/75 hover:text-white hover:underline"
             >
               配置 Excel 模板 &rarr;
             </NavLink>
@@ -174,15 +186,16 @@ export default function Layout() {
           {user?.role === 'admin' && !modelConfigured ? (
             <NavLink
               to="/settings"
-              className="block text-xs text-blue-500 hover:underline"
+              className="block text-xs text-cyan-200/75 hover:text-white hover:underline"
             >
               配置模型 API &rarr;
             </NavLink>
           ) : null}
-          <div className="mt-2 flex items-center justify-between border-t border-gray-100 pt-2">
-            <div className="min-w-0">
-              <p className="truncate font-medium text-gray-600">{user?.username}</p>
-              <p className="text-gray-400">
+          <div className="mt-3 flex items-center gap-2 border-t border-white/10 pt-3">
+            <ThemeToggle />
+            <div className="min-w-0 flex-1">
+              <p className="truncate font-medium text-cyan-50">{user?.username}</p>
+              <p className="mt-0.5 text-cyan-100/45">
                 {user?.role === 'admin'
                   ? '工作流配额：不限'
                   : `剩余配额：${Math.max(
@@ -197,7 +210,7 @@ export default function Layout() {
               onClick={() => void logout()}
               title="退出登录"
               aria-label="退出登录"
-              className="rounded-md p-1.5 text-gray-400 hover:bg-gray-100 hover:text-red-500"
+              className="rounded-xl p-2 text-cyan-100/45 transition hover:bg-red-400/10 hover:text-red-200"
             >
               <LogOut className="h-4 w-4" />
             </button>
@@ -218,14 +231,19 @@ export default function Layout() {
       <main className={
         isAgentWorkbench
           ? 'min-w-0 flex-1 overflow-hidden'
-          : 'min-w-0 flex-1 overflow-auto p-6'
+          : 'dsh-main min-w-0 flex-1 overflow-auto bg-[radial-gradient(circle_at_top_right,rgba(62,191,183,0.08),transparent_28rem)] p-6'
       }>
         <Outlet
           key={`${user?.role ?? 'anonymous'}:${selectedOwnerId ?? user?.id ?? ''}`}
           context={{ refreshTemplateStatus } satisfies LayoutOutletContext}
         />
       </main>
+      {isWorkbenchRoute ? (
+        <FloatingWhalePet safeRight={isAgentWorkbench ? agentPanelLayout.rightWidth + 24 : 28} />
+      ) : null}
     </div>
     </AgentPanelLayoutContext.Provider>
+    </PetActivityProvider>
+    </WorkbenchThemeProvider>
   )
 }

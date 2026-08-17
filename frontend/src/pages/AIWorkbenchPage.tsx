@@ -10,6 +10,8 @@ import { useToast } from '@/components/Toast'
 import AgentWorkbenchView, {
   type InspectorTab,
 } from '@/features/workbench/AgentWorkbenchView'
+import { useReportPetActivity } from '@/features/pet/usePetActivity'
+import type { PetActivity } from '@/features/pet/whalePetAnimation'
 import { discardDraft, getActiveDraft } from '@/services/draft'
 import {
   extractNextMaterial,
@@ -1005,6 +1007,18 @@ export default function AIWorkbenchPage() {
   const draftExcelRow = useMemo(() => (
     draft ? { ...draft.extracted, ...(taxonomy?.fields ?? {}) } : null
   ), [draft, taxonomy])
+  const petActivity: PetActivity = imageError
+    ? 'error'
+    : committing || skipping
+      ? 'saving'
+      : resolving
+        ? 'resolving'
+        : extracting
+          ? 'extracting'
+          : draft && draft.status !== STATUS.COMPLETED
+            ? 'awaiting-confirmation'
+            : 'idle'
+  useReportPetActivity(petActivity)
 
   if (loading) return <Loading />
 
