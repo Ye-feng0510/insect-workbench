@@ -326,10 +326,18 @@ class VisionModelClient:
     # ============================================================
 
     async def test_image_input(self) -> tuple[bool, str]:
-        """最小图片输入测试:确认模型支持图片。"""
+        """最小图片输入测试:确认模型支持图片。
+
+        测试图为配置尺寸的纯色方图(默认 32x32=1024 像素):
+        xAI/Grok 官方 API 要求宽高各>=8 且总像素>=512,过小会被 400 拒绝。
+        即使配置被人为调小,也钳制到满足 512 像素下限,保证 Grok 兼容。
+        """
         try:
-            # 生成一个 1x1 红色测试图
-            img = Image.new("RGB", (10, 10), color=(255, 0, 0))
+            size = settings.model_test_image_size
+            # 防呆钳制:确保总像素>=512(xAI 硬性下限),ceil(sqrt(512))=23
+            min_size_for_512 = 23
+            size = max(size, min_size_for_512)
+            img = Image.new("RGB", (size, size), color=(255, 0, 0))
             buf = io.BytesIO()
             img.save(buf, format="JPEG", quality=90)
             b64 = base64.b64encode(buf.getvalue()).decode("ascii")
@@ -354,9 +362,24 @@ class VisionModelClient:
             return True, "图片输入测试通过"
         except ModelError as e:
             msg = str(e)
+            # 优先识别"图片尺寸过小"类错误(xAI/Grok 会拒绝过小测试图):
+            # 文案含 pixel/size 且带 minimum/below/too small,属于尺寸问题而非能力问题
+            lowered = msg.lower()
+            if (
+                "pixel" in lowered or "dimension" in lowered or "too small" in lowered
+            ) and (
+                "minimum" in lowered
+                or "below" in lowered
+                or "too small" in lowered
+                or "at least" in lowered
+            ):
+                return False, (
+                    "模型服务拒绝了测试图片:图片尺寸过小"
+                    "(可调大 MODEL_TEST_IMAGE_SIZE 环境变量后重试)"
+                )
             if "404" in msg or "Not Found" in msg:
                 return False, "Base URL 不是 API 根地址,无法找到接口"
-            if "image" in msg.lower() or "multimodal" in msg.lower():
+            if "image" in lowered or "multimodal" in lowered:
                 return False, "当前模型不支持图片输入"
             return False, f"图片输入测试失败: {msg}"
         except Exception as e:

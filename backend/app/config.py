@@ -41,6 +41,12 @@ class Settings(BaseSettings):
     model_max_retries: int = 2  # 图片提取连续失败上限
     taxonomy_auto_correct_retries: int = 1  # 分类校验失败自动纠正次数
 
+    # 模型测试连接图片尺寸(方图边长)。
+    # xAI/Grok 官方 API 要求:宽高各>=8 且总像素>=512,否则 400。
+    # 默认 32(=1024 像素)同时满足 xAI 下限与最小化初衷;
+    # OpenAI 系无下限,行为不变。可用 MODEL_TEST_IMAGE_SIZE 环境变量覆盖。
+    model_test_image_size: int = Field(default=32, ge=8)
+
     # 图片预处理(清单第9节)
     image_max_long_edge: int = 3000
     image_jpeg_quality: int = 90
