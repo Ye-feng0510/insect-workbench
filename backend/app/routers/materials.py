@@ -25,6 +25,7 @@ from app.schemas import (
     MaterialSummary,
 )
 from app.services import materials_service
+from app.services import material_storage_service
 from app.services import recognition_service
 
 
@@ -99,6 +100,8 @@ async def upload_materials(
     max_bytes = settings.material_zip_max_size_mb * 1024 * 1024
     total = 0
     try:
+        # 上传前磁盘预算检查:预计空间不足时立即拒绝,不落盘大文件
+        material_storage_service.check_upload_budget(max_bytes)
         with incoming_path.open("wb") as output:
             while chunk := await file.read(1024 * 1024):
                 total += len(chunk)
@@ -108,19 +111,45 @@ async def upload_materials(
                         detail=f"压缩包不能超过 {settings.material_zip_max_size_mb} MB",
                     )
                 output.write(chunk)
-        result = materials_service.create_batch_from_zip_path(
+        # ZIP 校验/解压为同步阻塞操作,放入线程池避免阻塞事件循环
+        # (健康检查、轮询、其他请求不受大文件解压影响)
+        result = await run_in_threadpool(
+            materials_service.create_batch_from_zip_path,
             db,
             incoming_path,
             filename,
             ctx.owner_id,
         )
+        # 数据库提交成功后,安全清理被替换的旧批次(异步,不影响上传响应)
+        import asyncio as _asyncio
+
+        _asyncio.create_task(
+            run_in_threadpool(_cleanup_replaced_batches_safely, ctx.owner_id)
+        )
         # 通知预加载 worker 立即开始工作
         from app.services.prefetch_service import notify_worker
         notify_worker()
         return result
+    except material_storage_service.StorageBudgetError as exc:
+        raise HTTPException(status_code=507, detail=str(exc)) from exc
     finally:
         await file.close()
         incoming_path.unlink(missing_ok=True)
+
+
+def _cleanup_replaced_batches_safely(owner_id: int) -> None:
+    """上传成功后清理旧的非活跃批次;失败仅记录日志,不影响主流程。"""
+    from app.database import SessionLocal
+    from app.services import material_storage_service
+
+    db = SessionLocal()
+    try:
+        material_storage_service.cleanup_inactive_batches(db, owner_id)
+    except Exception:
+        # 清理失败不影响已成功的上传;下次上传或维护时会重试
+        pass
+    finally:
+        db.close()
 
 
 @router.post("/next-extract", response_model=MaterialExtractResponse)

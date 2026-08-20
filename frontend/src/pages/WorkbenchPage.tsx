@@ -77,16 +77,19 @@ export default function WorkbenchPage() {
   const extractionLockRef = useRef(false)
   const editRevisionRef = useRef(0)
   const mountedRef = useRef(false)
+  const prefetchBackoffRef = useRef(0)
+  const pollFailedRef = useRef(false)
 
   useEffect(() => {
     mountedRef.current = true
-    void activateClassicWorkbench()
+    void activateClassicWorkbench().catch(() => undefined)
     const heartbeat = window.setInterval(() => {
-      void activateClassicWorkbench()
+      void activateClassicWorkbench().catch(() => undefined)
     }, 60_000)
     return () => {
       window.clearInterval(heartbeat)
-      void deactivateClassicWorkbench()
+      // 退出清理:会话已失效(如已登出)时 401 是预期噪声,静默处理
+      void deactivateClassicWorkbench().catch(() => undefined)
       mountedRef.current = false
       extractionLockRef.current = false
     }
@@ -102,19 +105,61 @@ export default function WorkbenchPage() {
     return () => URL.revokeObjectURL(url)
   }, [originalFile])
 
-  // 定期轮询预加载状态
+  // 自适应轮询预加载状态:可见时正常间隔,隐藏时暂停,失败退避,恢复可见立即刷新
   const refreshPrefetchStatusCb = useCallback(async () => {
     try {
       setPrefetchStatus(await getPrefetchStatus())
+      prefetchBackoffRef.current = 0
+      pollFailedRef.current = false
     } catch {
       setPrefetchStatus(null)
+      pollFailedRef.current = true
     }
   }, [])
 
   useEffect(() => {
     void loadDraft()
-    const interval = setInterval(refreshPrefetchStatusCb, 3000)
-    return () => clearInterval(interval)
+    let cancelled = false
+    let timer: number | undefined
+    const BACKOFF_STEPS = [3000, 6000, 12000, 24000]
+
+    const schedule = (delayMs: number) => {
+      if (cancelled) return
+      timer = window.setTimeout(run, delayMs)
+    }
+
+    const run = async () => {
+      if (cancelled) return
+      if (document.visibilityState === 'hidden') {
+        // 页面隐藏:暂停轮询,由恢复可见事件驱动立即刷新
+        return
+      }
+      await refreshPrefetchStatusCb()
+      if (cancelled) return
+      if (pollFailedRef.current) {
+        const step = Math.min(prefetchBackoffRef.current, BACKOFF_STEPS.length - 1)
+        prefetchBackoffRef.current = step + 1
+        schedule(BACKOFF_STEPS[step])
+      } else {
+        schedule(BACKOFF_STEPS[0])
+      }
+    }
+
+    const onVisible = () => {
+      if (document.visibilityState === 'visible' && !cancelled) {
+        prefetchBackoffRef.current = 0
+        pollFailedRef.current = false
+        if (timer !== undefined) window.clearTimeout(timer)
+        void run()
+      }
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    void run()
+    return () => {
+      cancelled = true
+      document.removeEventListener('visibilitychange', onVisible)
+      if (timer !== undefined) window.clearTimeout(timer)
+    }
   }, [refreshPrefetchStatusCb]) // loadDraft is stable for this mount
 
   useEffect(() => {

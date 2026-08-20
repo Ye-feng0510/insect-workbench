@@ -234,9 +234,13 @@ async def extract_image_info(
         prompt = _load_recognition_prompt(db)
 
         try:
-            result = await recognize_image_with_ocr(
-                client, image_path, prompt, rotation_degrees
-            )
+            # 前台优先:手动识别立即获得资源槽位,后台预加载自动让渡
+            from app.services.resource_scheduler import get_scheduler
+
+            async with get_scheduler().slot(priority="foreground"):
+                result = await recognize_image_with_ocr(
+                    client, image_path, prompt, rotation_degrees
+                )
         except ModelError as e:
             record.status = STATUS_EXTRACTION_FAILED
             record.warnings_json = json.dumps([str(e)], ensure_ascii=False)
@@ -310,12 +314,16 @@ async def re_extract_image_info(
     quota_service.reserve(db, record.owner_id, record.id)
 
     try:
-        result = await recognize_image_with_ocr(
-            client,
-            record.image_path,
-            prompt,
-            record.rotation_degrees,
-        )
+        # 前台优先:手动重新识别立即获得资源槽位,后台预加载自动让渡
+        from app.services.resource_scheduler import get_scheduler
+
+        async with get_scheduler().slot(priority="foreground"):
+            result = await recognize_image_with_ocr(
+                client,
+                record.image_path,
+                prompt,
+                record.rotation_degrees,
+            )
     except ModelError as e:
         db.expire_all()
         current_record = db.get(SpecimenRecord, record.id)

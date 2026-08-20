@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     # 图片预处理(清单第9节)
     image_max_long_edge: int = 3000
     image_jpeg_quality: int = 90
+    # 预处理像素总量上限:超过先降采样再旋转/编码,控制内存峰值(0=不限制)
+    image_preprocess_max_pixels: int = 9_000_000
 
     # 本地 OCR。失败时自动回退到纯视觉模型识别。
     ocr_enabled: bool = True
@@ -64,6 +66,28 @@ class Settings(BaseSettings):
     material_prefetch_interval: float = 1.0  # worker 轮询间隔(秒)
     material_prefetch_max_retries: int = 3  # 单张素材预加载失败重试次数
     material_prefetch_retry_delay: float = 5.0  # 重试初始延迟(秒)
+    # 重启后预加载恢复冷却:避免容器重启瞬间恢复全部任务造成资源峰值
+    material_prefetch_recovery_cooldown_seconds: float = 20.0
+
+    # 资源调度:前台(用户手动识别)优先,后台(预加载)动态让渡。
+    # 并发能力保留,由优先级与内存压力决定后台实际可用槽位。
+    resource_recognition_slots: int = 3  # 识别类任务(前台+后台)全局槽位
+    resource_memory_pressure_mb: int = 256  # 系统可用内存低于该值时暂停后台预加载(0=禁用)
+    resource_memory_recheck_seconds: float = 5.0  # 内存压力恢复后的重检间隔
+
+    # SQLite 稳定性
+    sqlite_journal_mode: str = "wal"  # wal|delete|truncate... 默认 wal 提升读写并发
+    sqlite_busy_timeout_ms: int = 15000
+    sqlite_lock_retry_delays_ms: tuple[int, ...] = (50, 150, 400)  # 锁冲突退避序列
+
+    # 会话心跳写入节流:同一会话 last_seen_at 至少间隔该秒数才写库(0=每次写)
+    auth_session_last_seen_interval_seconds: int = 60
+
+    # 素材存储生命周期
+    material_storage_min_free_gb: float = 5.0  # 预计上传后低于该值拒绝上传
+    material_storage_warn_free_gb: float = 10.0  # 低于该值仅告警
+    material_storage_cleanup_incoming_max_age_hours: int = 24  # 残留 incoming_*.zip 清理阈值
+    material_archive_retention_days: int = 7  # 非活跃批次 ZIP/文件保留天数,0=替换后立即清理
 
     # 开发模式: 前端独立运行时允许跨域
     cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]

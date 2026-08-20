@@ -10,6 +10,7 @@ from app.auth import (
     AuthContext,
     clear_session_cookies,
     create_session,
+    forget_last_seen,
     get_auth_context,
     hash_password,
     set_session_cookies,
@@ -105,6 +106,7 @@ def logout(
 ):
     session = db.get(AuthSession, ctx.session_id)
     if session is not None:
+        forget_last_seen(session.id)
         db.delete(session)
         db.commit()
     clear_session_cookies(response)

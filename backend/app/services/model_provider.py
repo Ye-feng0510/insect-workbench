@@ -149,30 +149,41 @@ class VisionModelClient:
         """读取图片,EXIF 纠正 + 旋转 + RGB + 长边压缩 -> Base64 Data URL。
 
         原图不动,只生成内存中的 Base64。
+        内存峰值控制:超限像素先等比降采样再处理,中间对象用后即释。
         """
-        img = Image.open(image_path)
-        # 1. EXIF 方向纠正
-        img = ImageOps.exif_transpose(img)
-        # 2. 应用旋转(清单要求:前端旋转角度必须影响真实模型输入)
-        if rotation_degrees in (90, 180, 270):
-            img = img.rotate(-rotation_degrees, expand=True)
-        # 3. 转 RGB
-        if img.mode != "RGB":
-            img = img.convert("RGB")
-        # 4. 长边超过阈值时等比缩小
-        max_edge = settings.image_max_long_edge
-        w, h = img.size
-        if max(w, h) > max_edge:
-            ratio = max_edge / max(w, h)
-            img = img.resize(
-                (int(w * ratio), int(h * ratio)),
-                Image.Resampling.LANCZOS,
-            )
-        # 5. JPEG 质量 -> Base64
+        # 预处理前的像素上限:超过则先降采样,避免 40MP 级图片全量驻留内存
+        pixel_cap = settings.image_preprocess_max_pixels
         buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=settings.image_jpeg_quality)
-        b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-        return f"data:image/jpeg;base64,{b64}"
+        with Image.open(image_path) as source:
+            img = ImageOps.exif_transpose(source)
+            # 1. 应用旋转(清单要求:前端旋转角度必须影响真实模型输入)
+            if rotation_degrees in (90, 180, 270):
+                img = img.rotate(-rotation_degrees, expand=True)
+            # 2. 转 RGB
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+            # 3. 像素总量超限时先降采样(旋转/EXIF 处理后再判断尺寸)
+            if pixel_cap > 0 and img.width * img.height > pixel_cap:
+                ratio = (pixel_cap / (img.width * img.height)) ** 0.5
+                img = img.resize(
+                    (max(1, int(img.width * ratio)), max(1, int(img.height * ratio))),
+                    Image.Resampling.BILINEAR,
+                )
+            # 4. 长边超过阈值时等比缩小
+            max_edge = settings.image_max_long_edge
+            w, h = img.size
+            if max(w, h) > max_edge:
+                ratio = max_edge / max(w, h)
+                img = img.resize(
+                    (int(w * ratio), int(h * ratio)),
+                    Image.Resampling.LANCZOS,
+                )
+            # 5. JPEG 质量 -> Base64(缓冲区复用,编码后立即释放图像对象)
+            img.save(buf, format="JPEG", quality=settings.image_jpeg_quality)
+        img.close()
+        encoded = base64.b64encode(buf.getvalue()).decode("ascii")
+        buf.close()
+        return f"data:image/jpeg;base64,{encoded}"
 
     # ============================================================
     # 图片识别(清单第 10.1 节)

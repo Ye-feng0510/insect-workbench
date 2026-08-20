@@ -1,14 +1,17 @@
 """FastAPI 应用入口。开发时前后端分离(CORS),生产时 mount 前端 dist。"""
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy.exc import OperationalError
 
 from app.config import FRONTEND_DIST, settings
 from app.database import SessionLocal, init_db
+from app.db_retry import DatabaseUnavailableError, is_locked_error
 from app.routers import settings as settings_router
 from app.routers import templates as templates_router
 from app.routers import recognition as recognition_router
@@ -27,10 +30,17 @@ from app.version import APP_CAPABILITIES, APP_PRODUCT, APP_VERSION
 async def lifespan(app: FastAPI):
     """启动时初始化数据库与目录,启动后台预加载 worker。"""
     init_db()
+    # 存储启动维护:清理上传中断遗留的临时 ZIP(不阻塞启动)
+    from app.services.material_storage_service import schedule_startup_maintenance
+
+    maintenance = asyncio.create_task(
+        asyncio.to_thread(schedule_startup_maintenance)
+    )
     worker = PrefetchWorker()
     await worker.start()
     yield
     await worker.stop()
+    maintenance.cancel()
 
 
 app = FastAPI(
@@ -38,6 +48,28 @@ app = FastAPI(
     version=APP_VERSION,
     lifespan=lifespan,
 )
+
+
+@app.exception_handler(DatabaseUnavailableError)
+async def database_unavailable_handler(request: Request, exc: DatabaseUnavailableError):
+    """数据库锁等待超时 → 503 + Retry-After,而非未处理 500。"""
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "数据库正忙,请稍后重试"},
+        headers={"Retry-After": "2"},
+    )
+
+
+@app.exception_handler(OperationalError)
+async def database_locked_handler(request: Request, exc: OperationalError):
+    """未被重试层覆盖的 SQLite 锁冲突 → 503,保留结构化日志。"""
+    if not is_locked_error(exc):
+        raise exc
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "数据库正忙,请稍后重试"},
+        headers={"Retry-After": "2"},
+    )
 
 
 class MaterialUploadLimitMiddleware:

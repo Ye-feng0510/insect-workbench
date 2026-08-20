@@ -32,6 +32,7 @@ from app.models import (
     User,
 )
 from app.services import recognition_service
+from app.services.resource_scheduler import get_scheduler
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +107,8 @@ class PrefetchWorker:
         self._wakeup_event = asyncio.Event()
         self._semaphore: asyncio.Semaphore | None = None
         self._last_batch_id: int = 0
+        self._scheduler = get_scheduler()
+        self._started_at: float = time.monotonic()
 
     async def start(self) -> None:
         global _global_worker
@@ -113,6 +116,7 @@ class PrefetchWorker:
             return
         self._recover_stale_running()
         self._semaphore = asyncio.Semaphore(settings.material_prefetch_concurrency)
+        self._started_at = time.monotonic()
         _global_worker = self
         self._task = asyncio.create_task(self._run_loop())
 
@@ -163,7 +167,21 @@ class PrefetchWorker:
     async def _run_loop(self) -> None:
         while not self._stop_event.is_set():
             try:
-                await self._fill_window()
+                # 重启恢复冷却:避免容器重启瞬间恢复全部任务造成资源/锁峰值。
+                # 冷却期内 worker 仍然响应停止与唤醒日志,但不领取新任务。
+                since_start = time.monotonic() - self._started_at
+                cooldown = settings.material_prefetch_recovery_cooldown_seconds
+                if cooldown <= 0 or since_start >= cooldown:
+                    await self._fill_window()
+                else:
+                    self._wakeup_event.clear()
+                    try:
+                        await asyncio.wait_for(
+                            self._wakeup_event.wait(),
+                            timeout=min(cooldown - since_start, settings.material_prefetch_interval),
+                        )
+                    except asyncio.TimeoutError:
+                        pass
             except Exception:
                 logger.exception("预加载 worker 异常")
             self._wakeup_event.clear()
@@ -302,6 +320,8 @@ class PrefetchWorker:
                 )
                 already_ids = [row[0] for row in already_ids_rows]
 
+                # 批量创建 + 单次提交:显著降低 SQLite 写事务频率
+                created: list[MaterialPrefetchResult] = []
                 while (
                     active_count < max_lookahead
                     and ready_count + (active_count - ready_count) < max_lookahead
@@ -328,13 +348,14 @@ class PrefetchWorker:
                         rotation_degrees=0,
                     )
                     db.add(pf)
-                    db.commit()
-                    db.refresh(pf)
+                    created.append(pf)
                     already_ids.append(item.id)
                     active_count += 1
 
                     if active_count >= max_lookahead:
                         break
+                if created:
+                    db.commit()
 
             # 收集所有 queued 任务并并行执行
             queued_items = (
@@ -366,11 +387,19 @@ class PrefetchWorker:
                 await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _run_prefetch_task(self, pf_id: int, item_id: int, fingerprint: str) -> None:
-        """单个预加载任务：原子领取 → 调用模型 → 保存结果。"""
+        """单个预加载任务：原子领取 → 调用模型 → 保存结果。
+
+        资源调度:预加载属于后台任务,通过 resource_scheduler 获取槽位。
+        用户手动识别(前台)永远优先;内存压力时后台暂停领取,前台不受影响。
+        原有 Semaphore 保留作为并发上限的兜底约束。
+        """
         async with self._semaphore:
             if self._stop_event.is_set():
                 return
-            await self._prefetch_one(item_id, pf_id, fingerprint)
+            async with self._scheduler.slot(priority="background"):
+                if self._stop_event.is_set():
+                    return
+                await self._prefetch_one(item_id, pf_id, fingerprint)
 
     async def _prefetch_one(
         self,
@@ -486,33 +515,46 @@ class PrefetchWorker:
             db3.close()
 
     def _mark_failed(self, pf_id: int, error_message: str) -> None:
-        """标记任务为失败，设置指数退避重试时间。"""
-        db = SessionLocal()
-        try:
-            pf = db.get(MaterialPrefetchResult, pf_id)
-            if pf is None:
-                return
-            re_check = db.get(MaterialItem, pf.item_id)
-            if re_check is None or re_check.status != MATERIAL_STATUS_PENDING:
-                db.delete(pf)
-                db.commit()
-                return
+        """标记任务为失败，设置指数退避重试时间。
 
-            attempts = pf.attempt_count or 0
-            if attempts >= settings.material_prefetch_max_retries:
-                # 永久失败，不重试
-                pf.status = PREFETCH_STATUS_FAILED
-                pf.error_message = error_message
-                pf.next_retry_at = None
-            else:
-                # 指数退避
-                delay = settings.material_prefetch_retry_delay * (2 ** (attempts - 1))
-                pf.status = PREFETCH_STATUS_FAILED
-                pf.error_message = error_message
-                pf.next_retry_at = datetime.utcnow() + timedelta(seconds=delay)
-            db.commit()
-        finally:
-            db.close()
+        SQLite 锁冲突时按退避序列重试整个短事务(读-改-提交)。
+        """
+        from app.db_retry import DatabaseUnavailableError, run_write_with_retry
+
+        def _op() -> None:
+            db = SessionLocal()
+            try:
+                pf = db.get(MaterialPrefetchResult, pf_id)
+                if pf is None:
+                    return
+                re_check = db.get(MaterialItem, pf.item_id)
+                if re_check is None or re_check.status != MATERIAL_STATUS_PENDING:
+                    db.delete(pf)
+                    db.commit()
+                    return
+
+                attempts = pf.attempt_count or 0
+                if attempts >= settings.material_prefetch_max_retries:
+                    # 永久失败，不重试
+                    pf.status = PREFETCH_STATUS_FAILED
+                    pf.error_message = error_message
+                    pf.next_retry_at = None
+                else:
+                    # 指数退避
+                    delay = settings.material_prefetch_retry_delay * (2 ** (attempts - 1))
+                    pf.status = PREFETCH_STATUS_FAILED
+                    pf.error_message = error_message
+                    pf.next_retry_at = datetime.utcnow() + timedelta(seconds=delay)
+                db.commit()
+            finally:
+                db.close()
+
+        try:
+            run_write_with_retry(_op, log_label=f"prefetch-mark-failed-{pf_id}")
+        except DatabaseUnavailableError:
+            logger.error("预加载失败状态写入持续锁定 pf_id=%s", pf_id)
+        except Exception:
+            logger.exception("预加载失败状态写入异常 pf_id=%s", pf_id)
 
     # ============================================================
     # 清理方法

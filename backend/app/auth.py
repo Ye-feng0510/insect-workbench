@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import secrets
+import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -17,6 +18,29 @@ from app.models import AuthSession, ROLE_ADMIN, User
 
 _hasher = PasswordHasher()
 UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+# last_seen_at 写入节流:高频轮询请求不再每个都写库,大幅降低 SQLite 写压力。
+# 同一会话至少间隔 settings.auth_session_last_seen_interval_seconds 秒才落盘一次。
+_last_seen_cache: dict[int, float] = {}
+_last_seen_lock = threading.Lock()
+
+
+def _should_update_last_seen(session_id: int, now: datetime) -> bool:
+    interval = settings.auth_session_last_seen_interval_seconds
+    if interval <= 0:
+        return True
+    epoch = now.timestamp()
+    with _last_seen_lock:
+        last = _last_seen_cache.get(session_id)
+        if last is not None and (epoch - last) < interval:
+            return False
+        _last_seen_cache[session_id] = epoch
+        return True
+
+
+def forget_last_seen(session_id: int) -> None:
+    with _last_seen_lock:
+        _last_seen_cache.pop(session_id, None)
 
 
 def _utcnow() -> datetime:
@@ -108,6 +132,7 @@ def get_auth_context(
     )
     if auth_session is None or auth_session.expires_at <= _utcnow():
         if auth_session is not None:
+            forget_last_seen(auth_session.id)
             db.delete(auth_session)
             db.commit()
         raise HTTPException(status_code=401, detail="会话已过期")
@@ -127,8 +152,10 @@ def get_auth_context(
         if owner is None:
             raise HTTPException(status_code=422, detail="数据所有者不存在")
         owner_id = owner.id
-    auth_session.last_seen_at = _utcnow()
-    db.commit()
+    now = _utcnow()
+    if _should_update_last_seen(auth_session.id, now):
+        auth_session.last_seen_at = now
+        db.commit()
     return AuthContext(user=user, owner_id=owner_id, session_id=auth_session.id)
 
 

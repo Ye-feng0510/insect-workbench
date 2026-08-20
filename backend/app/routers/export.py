@@ -10,6 +10,7 @@ from typing import Any
 from fastapi import APIRouter, Depends
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from app.database import get_db
 from app.auth import AuthContext, get_auth_context
@@ -32,8 +33,14 @@ async def export_excel(
     ctx: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """生成导出 Excel 文件。"""
-    return excel_service.export_excel(db, ctx.owner_id, ctx.user.id)
+    """生成导出 Excel 文件。
+
+    工作簿复制/加载/保存为同步阻塞操作,放入线程池执行,
+    避免大导出阻塞事件循环(健康检查、轮询、其他请求)。
+    """
+    return await run_in_threadpool(
+        excel_service.export_excel, db, ctx.owner_id, ctx.user.id
+    )
 
 
 @router.get("/download/{filename}")

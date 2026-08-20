@@ -12,6 +12,10 @@ _engine_error: str | None = None
 _engine_lock = threading.Lock()
 _run_lock = threading.Lock()
 
+# OCR 输入降采样上限:OCR 不需要原图分辨率,超限先缩小再转数组,
+# 显著降低并发场景下的内存峰值(0=不限制)。
+OCR_MAX_INPUT_PIXELS = 4_000_000
+
 
 def _create_engine() -> Any:
     from rapidocr import RapidOCR
@@ -170,9 +174,24 @@ def recognize_text(
             rotation = rotation_degrees % 360
             if rotation:
                 image = image.rotate(-rotation, expand=True)
+            # 内存峰值控制:OCR 输入降采样(OCR 不依赖原始分辨率)
+            if (
+                OCR_MAX_INPUT_PIXELS > 0
+                and image.width * image.height > OCR_MAX_INPUT_PIXELS
+            ):
+                ratio = (OCR_MAX_INPUT_PIXELS / (image.width * image.height)) ** 0.5
+                image = image.resize(
+                    (
+                        max(1, int(image.width * ratio)),
+                        max(1, int(image.height * ratio)),
+                    ),
+                    Image.Resampling.BILINEAR,
+                )
             image_array = np.asarray(image.convert("RGB"))
+            image.close()
         with _run_lock:
             output = _run_engine(engine, image_array)
+        del image_array
         return {"lines": _normalize_output(output), "warnings": []}
     except Exception as exc:
         return {
