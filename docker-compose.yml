@@ -24,6 +24,9 @@ services:
       # 数据持久化: 容器内 /app/data 映射到宿主机(可用 INSECT_DATA_DIR 指向独立数据盘)
       - ${INSECT_DATA_DIR:-./data}:/app/data
     restart: unless-stopped
+    # 资源边界:防止 OCR/模型高峰把同机服务压进 swap;配合应用层资源调度器形成双层保护。
+    mem_limit: ${INSECT_MEM_LIMIT:-1500m}
+    cpus: ${INSECT_CPUS:-1.6}
     logging:
       driver: json-file
       options:

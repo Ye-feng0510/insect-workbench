@@ -3,12 +3,20 @@ import api from './api'
 import {
   checkBackendCompatibility,
   EXPECTED_BACKEND_VERSION,
+  isConnectivityIssue,
   REQUIRED_BACKEND_CAPABILITY,
 } from './version'
 
 describe('backend compatibility handshake', () => {
   afterEach(() => {
     vi.restoreAllMocks()
+  })
+
+  it('treats only unreachable as a connectivity issue', () => {
+    expect(isConnectivityIssue('unreachable')).toBe(true)
+    expect(isConnectivityIssue('missing_metadata')).toBe(false)
+    expect(isConnectivityIssue('version_mismatch')).toBe(false)
+    expect(isConnectivityIssue('missing_capability')).toBe(false)
   })
 
   it('accepts the exact backend version with the required capability', async () => {

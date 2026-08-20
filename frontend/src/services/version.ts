@@ -1,12 +1,18 @@
 import api from './api'
 
-export const EXPECTED_BACKEND_VERSION = 'v1.3.6'
+export const EXPECTED_BACKEND_VERSION = 'v1.3.7'
 export const REQUIRED_BACKEND_CAPABILITY = 'agent_workflows_v1'
 
 interface HealthResponse {
   version?: unknown
   capabilities?: unknown
 }
+
+export type IncompatibilityReason =
+  | 'unreachable'
+  | 'missing_metadata'
+  | 'version_mismatch'
+  | 'missing_capability'
 
 export type BackendCompatibility =
   | {
@@ -16,10 +22,15 @@ export type BackendCompatibility =
   }
   | {
     compatible: false
-    reason: 'unreachable' | 'missing_metadata' | 'version_mismatch' | 'missing_capability'
+    reason: IncompatibilityReason
     version: string | null
     capabilities: string[]
   }
+
+/** 不可达属于连接问题:不应向用户渲染为"版本不兼容"。 */
+export function isConnectivityIssue(reason: IncompatibilityReason): boolean {
+  return reason === 'unreachable'
+}
 
 export async function checkBackendCompatibility(): Promise<BackendCompatibility> {
   try {

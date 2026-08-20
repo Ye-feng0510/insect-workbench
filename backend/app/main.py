@@ -1,5 +1,6 @@
 """FastAPI 应用入口。开发时前后端分离(CORS),生产时 mount 前端 dist。"""
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -8,6 +9,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.exc import OperationalError
+
+logger = logging.getLogger(__name__)
 
 from app.config import FRONTEND_DIST, settings
 from app.database import SessionLocal, init_db
@@ -30,6 +33,8 @@ from app.version import APP_CAPABILITIES, APP_PRODUCT, APP_VERSION
 async def lifespan(app: FastAPI):
     """启动时初始化数据库与目录,启动后台预加载 worker。"""
     init_db()
+    # 低峰期(启动时)执行 WAL checkpoint,防止 -wal 文件长期膨胀占盘
+    _wal_checkpoint()
     # 存储启动维护:清理上传中断遗留的临时 ZIP(不阻塞启动)
     from app.services.material_storage_service import schedule_startup_maintenance
 
@@ -41,6 +46,23 @@ async def lifespan(app: FastAPI):
     yield
     await worker.stop()
     maintenance.cancel()
+
+
+def _wal_checkpoint() -> None:
+    """启动时合并 WAL 日志(TRUNCATE 模式),回收 -wal 磁盘空间。
+
+    失败仅记录日志:checkpoint 是维护操作,不影响正确性。
+    """
+    from sqlalchemy import text
+
+    from app.database import engine
+
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
+        logger.info("SQLite WAL checkpoint 完成")
+    except Exception:
+        logger.warning("SQLite WAL checkpoint 失败(不影响启动)", exc_info=True)
 
 
 app = FastAPI(
@@ -127,14 +149,21 @@ app.add_middleware(
 
 @app.get("/api/health")
 async def health() -> dict:
-    """健康检查接口,用于前后端连通测试。"""
-    return {
-        "status": "ok",
-        "product": APP_PRODUCT,
-        "app": settings.app_name,
-        "version": APP_VERSION,
-        "capabilities": list(APP_CAPABILITIES),
-    }
+    """健康检查接口,用于前后端连通测试。
+
+    no-store:健康状态不可被任何层缓存(浏览器/代理),
+    保证版本握手与 Docker healthcheck 始终看到实时状态。
+    """
+    return JSONResponse(
+        content={
+            "status": "ok",
+            "product": APP_PRODUCT,
+            "app": settings.app_name,
+            "version": APP_VERSION,
+            "capabilities": list(APP_CAPABILITIES),
+        },
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 # 注册路由
@@ -167,7 +196,18 @@ if FRONTEND_DIST.exists():
         except ValueError as exc:
             raise HTTPException(status_code=404, detail="Not Found") from exc
         if candidate.is_file():
-            return FileResponse(str(candidate))
+            # index.html 必须回源校验:确保服务器升级后刷新页面立即拿到新版本,
+            # 不被浏览器启发式缓存卡在旧前端(表现为升级后持续"版本不兼容")。
+            # hash 资源(/assets/*)文件名带指纹,由 StaticFiles 默认策略缓存即可。
+            headers = (
+                {"Cache-Control": "no-cache"}
+                if candidate.name == "index.html"
+                else None
+            )
+            return FileResponse(str(candidate), headers=headers)
         if Path(full_path).suffix:
             raise HTTPException(status_code=404, detail="Not Found")
-        return FileResponse(str(FRONTEND_DIST / "index.html"))
+        return FileResponse(
+            str(FRONTEND_DIST / "index.html"),
+            headers={"Cache-Control": "no-cache"},
+        )

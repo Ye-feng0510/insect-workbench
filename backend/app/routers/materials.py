@@ -2,8 +2,8 @@
 from pathlib import Path
 import uuid
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi.responses import FileResponse, Response
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 
@@ -276,6 +276,7 @@ async def preview_window(
 @router.get("/image/{item_id}")
 async def material_image(
     item_id: int,
+    request: Request,
     variant: str = Query("original", pattern="^(preview|original)$"),
     ctx: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db),
@@ -303,12 +304,29 @@ async def material_image(
             image_path = await run_in_threadpool(get_preview_path, image_path)
         except (OSError, ValueError):
             raise HTTPException(status_code=422, detail="素材图片无法生成预览") from None
+        # ETag(mtime+size):浏览器缓存命中时条件请求直接 304,
+        # 不再重复走 Python 鉴权 + 磁盘全量读取
+        stat = image_path.stat()
+        etag = f'"{stat.st_mtime_ns:x}-{stat.st_size:x}"'
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers={
+                "ETag": etag,
+                "Cache-Control": "private, max-age=86400",
+            })
         return FileResponse(
             str(image_path),
             media_type="image/webp",
-            headers={"Cache-Control": "private, max-age=86400"},
+            headers={
+                "Cache-Control": "private, max-age=86400",
+                "ETag": etag,
+            },
         )
-    return FileResponse(str(image_path), filename=item.original_filename)
+    # 原图与会话绑定且内容不可变(stored_path 随机命名),同会话内允许缓存
+    return FileResponse(
+        str(image_path),
+        filename=item.original_filename,
+        headers={"Cache-Control": "private, max-age=86400"},
+    )
 
 
 @router.post("/prefetch/invalidate")

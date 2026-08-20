@@ -948,11 +948,23 @@ def test_exhausted_quota_preserves_pending_item_and_image_access(
     assert preview.status_code == 200
     item_id = preview.json()["item_id"]
     assert preview.json()["image_url"].endswith("?variant=preview")
-    assert client.get(f"/api/materials/image/{item_id}").status_code == 200
+    original = client.get(f"/api/materials/image/{item_id}")
+    assert original.status_code == 200
+    # 原图响应带会话级缓存头:同会话重复访问不再全量重传
+    assert "max-age=86400" in original.headers.get("cache-control", "")
     preview_image = client.get(f"/api/materials/image/{item_id}?variant=preview")
     assert preview_image.status_code == 200
     assert preview_image.headers["content-type"].startswith("image/webp")
     assert "max-age=86400" in preview_image.headers["cache-control"]
+    # ETag 条件请求:命中缓存时返回 304,不再走磁盘全量读取
+    etag = preview_image.headers.get("etag")
+    assert etag, "preview response must carry an ETag"
+    conditional = client.get(
+        f"/api/materials/image/{item_id}?variant=preview",
+        headers={"If-None-Match": etag},
+    )
+    assert conditional.status_code == 304
+    assert conditional.headers.get("etag") == etag
 
     exhausted = client.post("/api/materials/next-extract")
     assert exhausted.status_code == 429

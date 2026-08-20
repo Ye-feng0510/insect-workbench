@@ -1,11 +1,17 @@
 """本地 OCR 服务。"""
 from __future__ import annotations
 
+import os
 import threading
 from collections.abc import Sequence
 from typing import Any
 
 from PIL import Image, ImageOps
+
+# ONNX Runtime 默认按宿主机全部逻辑核开线程,在低配/混部服务器上
+# 单次 OCR 即可抢占全部 CPU。限制为 1 线程:推理稍慢但 Web 请求保持响应。
+# 可通过环境变量 OCR_CPU_THREADS 覆盖(0 表示不限制)。
+OCR_CPU_THREADS = 1
 
 _engine: Any | None = None
 _engine_error: str | None = None
@@ -20,7 +26,19 @@ OCR_MAX_INPUT_PIXELS = 4_000_000
 def _create_engine() -> Any:
     from rapidocr import RapidOCR
 
-    return RapidOCR()
+    kwargs: dict[str, Any] = {}
+    threads = OCR_CPU_THREADS
+    if threads > 0:
+        # RapidOCR v3+ 支持 cpu_threads;旧版本通过 ONNX 会话选项限制
+        kwargs["cpu_threads"] = threads
+        os.environ.setdefault("OMP_NUM_THREADS", str(threads))
+    try:
+        return RapidOCR(**kwargs)
+    except TypeError:
+        # RapidOCR 版本不支持 cpu_threads 参数:回退到环境变量方式
+        if threads > 0:
+            os.environ["OMP_NUM_THREADS"] = str(threads)
+        return RapidOCR()
 
 
 def _get_engine() -> Any:
