@@ -109,7 +109,12 @@ class VisionModelClient:
 
         last_error: Exception | None = None
         retries = settings.model_max_retries + 1
-        for attempt in range(retries):
+        # 推理模型预算自适应状态(与网络重试预算相互独立):
+        # 仅当"HTTP 200 + content 空 + 含 reasoning_content + finish_reason=length"
+        # 时按倍数放大 max_tokens 重试,判断只依赖协议字段,不区分供应商。
+        escalations_left = settings.model_reasoning_max_escalations
+        attempt = 0
+        while attempt < retries:
             try:
                 async with httpx.AsyncClient(timeout=self.timeout) as client:
                     resp = await client.post(
@@ -123,13 +128,39 @@ class VisionModelClient:
                         f"模型接口返回 HTTP {resp.status_code}: {body}"
                     )
                 data = resp.json()
-                content = data["choices"][0]["message"]["content"]
-                if not content or not content.strip():
-                    raise ModelError("模型返回空内容")
-                return content.strip()
+                message = data["choices"][0].get("message") or {}
+                content = (message.get("content") or "").strip()
+                finish_reason = (data["choices"][0].get("finish_reason") or "").strip()
+                has_reasoning = bool((message.get("reasoning_content") or "").strip())
+
+                # 推理模型输出预算被思考耗尽:放大预算重试(不消耗网络重试次数)
+                if (
+                    not content
+                    and has_reasoning
+                    and finish_reason == "length"
+                    and payload["max_tokens"] < settings.model_reasoning_max_tokens
+                    and escalations_left > 0
+                ):
+                    payload["max_tokens"] = min(
+                        payload["max_tokens"] * settings.model_reasoning_budget_multiplier,
+                        settings.model_reasoning_max_tokens,
+                    )
+                    escalations_left -= 1
+                    continue
+
+                if not content:
+                    # 诊断化错误:携带 finish_reason/推理标记/预算,便于线上排障
+                    raise ModelError(
+                        "模型返回空内容("
+                        f"finish_reason={finish_reason or 'unknown'},"
+                        f"含推理输出={has_reasoning},"
+                        f"max_tokens={payload['max_tokens']})"
+                    )
+                return content
             except (httpx.TimeoutException, httpx.ConnectError) as e:
                 last_error = e
-                if attempt < retries - 1:
+                attempt += 1
+                if attempt < retries:
                     continue
                 raise ModelError(f"模型连接失败(重试{retries}次后): {e}") from e
             except (KeyError, json.JSONDecodeError) as e:
@@ -237,7 +268,7 @@ class VisionModelClient:
             },
         ]
 
-        raw = await self._chat(messages, max_tokens=1000)
+        raw = await self._chat(messages, max_tokens=settings.model_max_tokens_recognize)
         return self._parse_json_response(raw)
 
     # ============================================================
@@ -260,7 +291,7 @@ class VisionModelClient:
             },
         ]
 
-        raw = await self._chat(messages, max_tokens=800)
+        raw = await self._chat(messages, max_tokens=settings.model_max_tokens_taxonomy)
         return self._parse_json_response(raw)
 
     async def explain_taxonomy(
@@ -287,7 +318,7 @@ class VisionModelClient:
                 ),
             },
         ]
-        return await self._chat(messages, max_tokens=600)
+        return await self._chat(messages, max_tokens=settings.model_max_tokens_explain)
 
     # ============================================================
     # JSON 解析(清单第 9 节:处理非合法 JSON)
@@ -358,11 +389,19 @@ class VisionModelClient:
                     ],
                 },
             ]
-            content = await self._chat(messages, max_tokens=50)
+            content = await self._chat(messages, max_tokens=settings.model_max_tokens_test)
             return True, "图片输入测试通过"
         except ModelError as e:
             msg = str(e)
-            # 优先识别"图片尺寸过小"类错误(xAI/Grok 会拒绝过小测试图):
+            # 优先识别推理模型预算耗尽(自适应放大到上限仍为空):
+            # 必须早于"不支持图片输入"等关键词启发式,防止误分类
+            if "finish_reason=length" in msg and "含推理输出=True" in msg:
+                return False, (
+                    "推理模型思考耗尽了 token 预算(已自动放大仍不足)。"
+                    "可调大 MODEL_MAX_TOKENS_TEST / MODEL_REASONING_MAX_TOKENS "
+                    "环境变量后重试"
+                )
+            # 识别"图片尺寸过小"类错误(xAI/Grok 会拒绝过小测试图):
             # 文案含 pixel/size 且带 minimum/below/too small,属于尺寸问题而非能力问题
             lowered = msg.lower()
             if (
@@ -395,7 +434,7 @@ class VisionModelClient:
                 },
                 {"role": "user", "content": "请返回测试JSON。"},
             ]
-            raw = await self._chat(messages, max_tokens=50)
+            raw = await self._chat(messages, max_tokens=settings.model_max_tokens_test)
             parsed = self._parse_json_response(raw)
             if isinstance(parsed, dict):
                 return True, "文本JSON分类测试通过"

@@ -41,6 +41,21 @@ class Settings(BaseSettings):
     model_max_retries: int = 2  # 图片提取连续失败上限
     taxonomy_auto_correct_retries: int = 1  # 分类校验失败自动纠正次数
 
+    # 各调用点输出 token 预算(仅是上限,非推理模型消耗不变)。
+    # 推理模型(reasoning model)先在 reasoning_content 中思考再输出 content,
+    # 两者共享同一 max_tokens 预算,预算过小会导致正式回答被完全挤掉。
+    model_max_tokens_test: int = 1024  # 测试连接(图片/文本)
+    model_max_tokens_recognize: int = 2000  # 图片识别提取
+    model_max_tokens_taxonomy: int = 1200  # 分类补全
+    model_max_tokens_explain: int = 1000  # 核验问答
+
+    # 推理模型预算自适应:HTTP 200 但 content 为空 + 含 reasoning_content
+    # + finish_reason=="length"(预算被思考耗尽)时,按倍数放大 max_tokens 重试。
+    # 判断只依赖 OpenAI 兼容协议标准字段,不区分供应商。
+    model_reasoning_budget_multiplier: int = 4  # 每次放大的倍数
+    model_reasoning_max_tokens: int = 8000  # 放大上限(成本护栏)
+    model_reasoning_max_escalations: int = 2  # 最多放大次数(防无限循环)
+
     # 模型测试连接图片尺寸(方图边长)。
     # xAI/Grok 官方 API 要求:宽高各>=8 且总像素>=512,否则 400。
     # 默认 32(=1024 像素)同时满足 xAI 下限与最小化初衷;
