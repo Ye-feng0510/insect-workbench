@@ -37,18 +37,26 @@ class StorageBudgetError(RuntimeError):
     """磁盘空间不足以完成上传。"""
 
 
-def check_upload_budget(incoming_zip_bytes: int) -> dict[str, Any]:
-    """上传前磁盘预算检查。
+def projected_free_bytes(incoming_zip_bytes: int) -> int:
+    """按待上传 ZIP 字节数估算完成后的剩余空间(含解压膨胀系数)。"""
+    expansion = settings.material_storage_extract_expansion_factor
+    usage = shutil.disk_usage(MATERIAL_ZIPS_DIR)
+    return usage.free - incoming_zip_bytes - int(incoming_zip_bytes * expansion)
 
-    预算 = 临时 ZIP + 解压展开估算(ZIP 大小 × 2.5 经验系数) + 安全余量。
+
+def check_upload_budget(incoming_zip_bytes: int) -> dict[str, Any]:
+    """上传前/落盘中磁盘预算检查。
+
+    预算 = 临时 ZIP + 解压展开估算(ZIP 大小 × 可配膨胀系数) + 安全余量。
+    调用方应传入**实际待写入字节数**(如 Content-Length 或已落盘字节数),
+    而非配置上限:按上限预扣会把所有上传整体锁死(2026-08-22 生产事故)。
     预计完成后低于 material_storage_min_free_gb 时抛出 StorageBudgetError。
     """
     min_free_bytes = settings.material_storage_min_free_gb * 1024**3
     warn_free_bytes = settings.material_storage_warn_free_gb * 1024**3
-    usage = shutil.disk_usage(MATERIAL_ZIPS_DIR)
-    projected_free = usage.free - incoming_zip_bytes - int(incoming_zip_bytes * 2.5)
+    projected_free = projected_free_bytes(incoming_zip_bytes)
     info = {
-        "free_bytes": usage.free,
+        "free_bytes": shutil.disk_usage(MATERIAL_ZIPS_DIR).free,
         "projected_free_bytes": projected_free,
         "min_free_bytes": int(min_free_bytes),
         "warn": projected_free < warn_free_bytes,
@@ -104,10 +112,40 @@ def _batch_has_referenced_items(db: Session, batch_id: int) -> bool:
 
 
 def _remove_batch_files(batch: MaterialBatch) -> None:
+    """删除批次解压目录与 ZIP,文件多时分批限速避免 I/O 风暴抢前台。
+
+    chunk_files<=0 时退回一次性 rmtree(旧行为)。
+    """
     if batch.extract_dir:
-        shutil.rmtree(batch.extract_dir, ignore_errors=True)
+        chunk = settings.material_storage_delete_chunk_files
+        if chunk <= 0:
+            shutil.rmtree(batch.extract_dir, ignore_errors=True)
+        else:
+            _rmtree_in_chunks(Path(batch.extract_dir), chunk)
     if batch.stored_zip_path:
         Path(batch.stored_zip_path).unlink(missing_ok=True)
+
+
+def _rmtree_in_chunks(root: Path, chunk_files: int) -> None:
+    """分批删除目录树:每删 chunk_files 个文件暂停片刻,让出 I/O 与 CPU。"""
+    pause = settings.material_storage_delete_chunk_pause_seconds
+    pending: list[Path] = [root]
+    deleted_since_pause = 0
+    while pending:
+        current = pending.pop()
+        try:
+            if current.is_dir():
+                pending.extend(current.iterdir())
+            else:
+                current.unlink(missing_ok=True)
+                deleted_since_pause += 1
+                if deleted_since_pause >= chunk_files:
+                    deleted_since_pause = 0
+                    if pause > 0:
+                        time.sleep(pause)
+        except OSError:
+            continue  # 单文件失败不中断整体清理;残留目录由 rmtree 兜底
+    shutil.rmtree(root, ignore_errors=True)
 
 
 def cleanup_inactive_batches(

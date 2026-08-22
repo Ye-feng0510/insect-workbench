@@ -383,6 +383,19 @@ class MaterialSummary(BaseModel):
     quota_exhausted: bool = False
 
 
+class MaterialIngestJobResponse(BaseModel):
+    """异步素材摄取任务状态。"""
+
+    job_id: int
+    status: str
+    processed_count: int = 0
+    total_planned: int = 0
+    total_count: int = 0
+    error_message: str = ""
+    created_at: datetime
+    updated_at: datetime
+
+
 class MaterialExtractResponse(ExtractResponse):
     material_item_id: int
     batch_id: int

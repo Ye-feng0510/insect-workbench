@@ -17,15 +17,19 @@ from app.models import (
     MATERIAL_STATUS_PROCESSING,
     MATERIAL_STATUS_SKIPPED,
     MaterialItem,
+    INGEST_STATUS_PROCESSING,
+    MaterialIngestJob,
 )
 from app.schemas import (
     MaterialExtractResponse,
     MaterialItemInfo,
     MaterialPreviewWindow,
     MaterialSummary,
+    MaterialIngestJobResponse,
 )
 from app.services import materials_service
 from app.services import material_storage_service
+from app.services import material_ingest_service
 from app.services import recognition_service
 
 
@@ -81,8 +85,9 @@ async def items(
     )
 
 
-@router.post("/upload", response_model=MaterialSummary)
+@router.post("/upload", response_model=MaterialIngestJobResponse, status_code=202)
 async def upload_materials(
+    request: Request,
     file: UploadFile = File(...),
     ctx: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db),
@@ -95,13 +100,29 @@ async def upload_materials(
             status_code=409,
             detail="工作台存在未完成草稿,请先完成或清空后再上传新的素材包",
         )
+    if material_ingest_service.has_active_job(db, ctx.owner_id):
+        raise HTTPException(
+            status_code=409,
+            detail="已有素材包正在解析,请等待当前任务完成后再上传",
+        )
 
     incoming_path = MATERIAL_ZIPS_DIR / f"incoming_{uuid.uuid4().hex}.zip"
     max_bytes = settings.material_zip_max_size_mb * 1024 * 1024
     total = 0
+    next_budget_check = settings.material_storage_budget_recheck_bytes
     try:
-        # 上传前磁盘预算检查:预计空间不足时立即拒绝,不落盘大文件
-        material_storage_service.check_upload_budget(max_bytes)
+        # 优先按实际 multipart Content-Length 预估,不可用时才使用配置上限兜底。
+        # Content-Length 包含 multipart 开销,属于略保守但不会按 2GB 上限误拒小包。
+        content_length = request.headers.get("content-length") if request else None
+        try:
+            declared_bytes = max(
+                0,
+                int(content_length or 0),
+            )
+        except ValueError:
+            declared_bytes = 0
+        budget_bytes = min(max_bytes, declared_bytes) if declared_bytes else max_bytes
+        material_storage_service.check_upload_budget(budget_bytes)
         with incoming_path.open("wb") as output:
             while chunk := await file.read(1024 * 1024):
                 total += len(chunk)
@@ -111,30 +132,57 @@ async def upload_materials(
                         detail=f"压缩包不能超过 {settings.material_zip_max_size_mb} MB",
                     )
                 output.write(chunk)
-        # ZIP 校验/解压为同步阻塞操作,放入线程池避免阻塞事件循环
-        # (健康检查、轮询、其他请求不受大文件解压影响)
-        result = await run_in_threadpool(
-            materials_service.create_batch_from_zip_path,
-            db,
+                if (
+                    next_budget_check > 0
+                    and total >= next_budget_check
+                ):
+                    material_storage_service.check_upload_budget(total)
+                    next_budget_check += settings.material_storage_budget_recheck_bytes
+        # 落盘完成后始终按真实 ZIP 大小复核,再进入解压阶段。
+        material_storage_service.check_upload_budget(total)
+        job = MaterialIngestJob(
+            owner_id=ctx.owner_id,
+            original_filename=filename,
+            source_path=str(incoming_path),
+            status=INGEST_STATUS_PROCESSING,
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+        material_ingest_service.start_job(
+            job.id,
             incoming_path,
             filename,
             ctx.owner_id,
+            bind=db.get_bind(),
         )
-        # 数据库提交成功后,安全清理被替换的旧批次(异步,不影响上传响应)
-        import asyncio as _asyncio
-
-        _asyncio.create_task(
-            run_in_threadpool(_cleanup_replaced_batches_safely, ctx.owner_id)
-        )
-        # 通知预加载 worker 立即开始工作
-        from app.services.prefetch_service import notify_worker
-        notify_worker()
-        return result
+        incoming_path = None
+        return material_ingest_service.serialize_job(job)
     except material_storage_service.StorageBudgetError as exc:
         raise HTTPException(status_code=507, detail=str(exc)) from exc
     finally:
         await file.close()
-        incoming_path.unlink(missing_ok=True)
+        if incoming_path is not None:
+            incoming_path.unlink(missing_ok=True)
+
+
+@router.get("/ingest/{job_id}", response_model=MaterialIngestJobResponse)
+async def ingest_status(
+    job_id: int,
+    ctx: AuthContext = Depends(get_auth_context),
+    db: Session = Depends(get_db),
+):
+    job = (
+        db.query(MaterialIngestJob)
+        .filter(
+            MaterialIngestJob.id == job_id,
+            MaterialIngestJob.owner_id == ctx.owner_id,
+        )
+        .first()
+    )
+    if job is None:
+        raise HTTPException(status_code=404, detail="素材解析任务不存在")
+    return material_ingest_service.serialize_job(job)
 
 
 def _cleanup_replaced_batches_safely(owner_id: int) -> None:

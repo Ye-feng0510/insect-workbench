@@ -54,6 +54,8 @@ class ResourceScheduler:
         self._waiters: list[_Waiter] = []
         self._seq = 0
         self._pressure_since: float | None = None
+        self._resume_since: float | None = None
+        self._memory_paused_state = False
         self._last_pressure_log = 0.0
 
     @property
@@ -80,16 +82,40 @@ class ResourceScheduler:
     def _memory_paused(self) -> bool:
         threshold = settings.resource_memory_pressure_mb
         if threshold <= 0:
+            self._memory_paused_state = False
+            self._pressure_since = None
+            self._resume_since = None
             return False
         available = self.available_memory_mb()
-        if available is None or available >= threshold:
-            self._pressure_since = None
-            return False
+        if available is None:
+            return self._memory_paused_state
         now = time.monotonic()
-        if self._pressure_since is None:
-            self._pressure_since = now
-        # 连续 2 秒低于阈值才算真正压力,避免瞬时抖动暂停后台
-        return (now - self._pressure_since) >= 2.0
+        if not self._memory_paused_state:
+            if available >= threshold:
+                self._pressure_since = None
+                return False
+            if self._pressure_since is None:
+                self._pressure_since = now
+            # 连续 2 秒低于暂停阈值才算真正压力,避免瞬时抖动暂停后台
+            if now - self._pressure_since >= 2.0:
+                self._memory_paused_state = True
+                self._resume_since = None
+            return self._memory_paused_state
+
+        resume_threshold = threshold + max(
+            0.0, settings.resource_memory_resume_headroom_mb
+        )
+        if available < resume_threshold:
+            self._resume_since = None
+            return True
+        if self._resume_since is None:
+            self._resume_since = now
+        # 恢复也要求连续 2 秒超过更高的恢复阈值,避免暂停/恢复震荡
+        if now - self._resume_since >= 2.0:
+            self._memory_paused_state = False
+            self._pressure_since = None
+            self._resume_since = None
+        return self._memory_paused_state
 
     def _maybe_log_pressure(self, paused: bool) -> None:
         if not paused:

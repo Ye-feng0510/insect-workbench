@@ -1,15 +1,16 @@
 """数据素材图片批次、队列、跳过和安全测试。"""
 import io
 import json
+import time
 import zipfile
 
+import httpx
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from PIL import Image
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db
 from app.main import app
@@ -49,9 +50,8 @@ def zip_bytes(files: dict[str, bytes]) -> bytes:
 @pytest.fixture
 def materials_client(tmp_path, monkeypatch):
     engine = create_engine(
-        "sqlite://",
+        f"sqlite:///{tmp_path / 'materials-test.db'}",
         connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
     )
     Base.metadata.create_all(engine)
     TestSession = sessionmaker(bind=engine)
@@ -80,6 +80,7 @@ def materials_client(tmp_path, monkeypatch):
     monkeypatch.setattr(materials_service, "MATERIAL_EXPORTS_DIR", export_dir)
     monkeypatch.setattr(materials_service, "IMAGES_DIR", recognition_dir)
     monkeypatch.setattr(materials_router, "MATERIAL_ZIPS_DIR", zip_dir)
+    monkeypatch.setattr(materials_service.settings, "material_preview_prewarm_count", 0)
 
     def override_get_db():
         db = TestSession()
@@ -94,10 +95,35 @@ def materials_client(tmp_path, monkeypatch):
 
 
 def upload_zip(client: TestClient, files: dict[str, bytes]):
-    return client.post(
+    response = client.post(
         "/api/materials/upload",
         files={"file": ("昆虫素材.zip", zip_bytes(files), "application/zip")},
     )
+    if response.status_code != 202:
+        return response
+    job_id = response.json()["job_id"]
+    for _ in range(100):
+        status = client.get(f"/api/materials/ingest/{job_id}")
+        assert status.status_code == 200
+        payload = status.json()
+        if payload["status"] == "completed":
+            time.sleep(0.02)
+            return client.get("/api/materials/summary")
+        if payload["status"] == "failed":
+            status_code = (
+                413
+                if any(
+                    marker in payload["error_message"]
+                    for marker in ("不能超过", "最多包含", "像素")
+                )
+                else 400
+            )
+            return httpx.Response(
+                status_code,
+                json={"detail": payload["error_message"]},
+            )
+        time.sleep(0.01)
+    raise AssertionError("素材异步解析测试超时")
 
 
 def test_upload_extracts_images_and_reports_summary(materials_client):
@@ -178,10 +204,7 @@ def test_upload_rejects_zip_path_traversal(materials_client):
 
 def test_upload_rejects_invalid_or_empty_zip(materials_client):
     client, _ = materials_client
-    invalid = client.post(
-        "/api/materials/upload",
-        files={"file": ("bad.zip", b"not-a-zip", "application/zip")},
-    )
+    invalid = upload_zip(client, {"bad.zip": b"not-a-zip"})
     assert invalid.status_code == 400
 
     empty = upload_zip(client, {"readme.txt": b"no images"})

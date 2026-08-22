@@ -109,6 +109,27 @@ class Settings(BaseSettings):
     material_storage_warn_free_gb: float = 10.0  # 低于该值仅告警
     material_storage_cleanup_incoming_max_age_hours: int = 24  # 残留 incoming_*.zip 清理阈值
     material_archive_retention_days: int = 7  # 非活跃批次 ZIP/文件保留天数,0=替换后立即清理
+    # 上传磁盘预算:解压空间估算系数(ZIP 大小 × 系数)
+    material_storage_extract_expansion_factor: float = 2.5
+    # 流式落盘期间每写入该字节数复查一次预算(0=仅按 Content-Length 预检一次)
+    material_storage_budget_recheck_bytes: int = 64 * 1024 * 1024
+
+    # 上传解析异步任务(收包即返回,后台解压+校验+入库)
+    material_ingest_progress_interval_items: int = 10  # 每解析 N 张更新一次进度
+    material_ingest_progress_interval_seconds: float = 2.0  # 或每 N 秒更新一次进度
+    material_ingest_job_max_age_hours: int = 24  # 遗留 processing 任务判定中断的时限
+
+    # 解析完成后后台预生成预览图(0=关闭)
+    material_preview_prewarm_count: int = 12
+    material_preview_prewarm_interval_seconds: float = 0.05
+
+    # 旧批次文件分批删除限速(0=退回一次性 rmtree)
+    material_storage_delete_chunk_files: int = 500
+    material_storage_delete_chunk_pause_seconds: float = 0.2
+
+    # 内存压力迟滞:低于 resource_memory_pressure_mb 暂停后台;
+    # 恢复需回升至 暂停阈值+该余量(0=与暂停阈值相同,退回旧行为)
+    resource_memory_resume_headroom_mb: float = 256.0
 
     # 开发模式: 前端独立运行时允许跨域
     cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]

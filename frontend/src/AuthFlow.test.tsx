@@ -19,7 +19,7 @@ import { checkBackendCompatibility } from '@/services/version'
 import type { AuthUser } from '@/types'
 
 vi.mock('@/services/version', () => ({
-  EXPECTED_BACKEND_VERSION: 'v1.3.8',
+  EXPECTED_BACKEND_VERSION: 'v1.3.9',
   REQUIRED_BACKEND_CAPABILITY: 'agent_workflows_v1',
   checkBackendCompatibility: vi.fn(),
 }))
@@ -102,7 +102,7 @@ describe('frontend authentication and RBAC', () => {
     vi.clearAllMocks()
     vi.mocked(checkBackendCompatibility).mockResolvedValue({
       compatible: true,
-      version: 'v1.3.8',
+      version: 'v1.3.9',
       capabilities: ['agent_workflows_v1'],
     })
     workbenchMounted.mockClear()

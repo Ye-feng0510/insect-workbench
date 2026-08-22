@@ -17,6 +17,8 @@ import time
 from datetime import datetime, timedelta
 from typing import Any
 
+from sqlalchemy.orm import Session
+
 from app.config import settings
 from app.database import SessionLocal
 from app.models import (
@@ -91,6 +93,37 @@ def _get_current_fingerprint() -> str | None:
         db.close()
 
 
+def _commit_with_retry(db: Session, label: str) -> bool:
+    """后台预加载专用提交:SQLite 锁冲突时按退避序列重试。
+
+    与 db_retry.run_write_with_retry 的区别:最终仍失败时**不抛异常**,
+    回滚并返回 False——后台任务的修改都有状态 filter 守卫(幂等),
+    本周期安全跳过即可,下一轮 worker 周期天然重试,不需要 503。
+    """
+    from sqlalchemy.exc import OperationalError
+
+    from app.db_retry import is_locked_error
+
+    for delay_ms in settings.sqlite_lock_retry_delays_ms:
+        try:
+            db.commit()
+            return True
+        except OperationalError as exc:
+            if not is_locked_error(exc):
+                raise
+            db.rollback()
+            time.sleep(delay_ms / 1000.0)
+    try:
+        db.commit()
+        return True
+    except OperationalError as exc:
+        if not is_locked_error(exc):
+            raise
+        db.rollback()
+        logger.warning("预加载提交持续锁冲突,跳过本周期: %s", label)
+        return False
+
+
 class PrefetchWorker:
     """后台并行预加载 worker。
 
@@ -156,7 +189,7 @@ class PrefetchWorker:
                 },
                 synchronize_session=False,
             )
-            db.commit()
+            _commit_with_retry(db, "recover-stale-running")
         finally:
             db.close()
 
@@ -245,7 +278,8 @@ class PrefetchWorker:
             for s in stale:
                 db.delete(s)
             if stale:
-                db.commit()
+                if not _commit_with_retry(db, f"clear-stale-fingerprint-batch{batch.id}"):
+                    return  # 本周期放弃,避免带着过期会话继续
 
             # 重试到期且未超限的 failed 任务 → queued
             now = datetime.utcnow()
@@ -264,7 +298,8 @@ class PrefetchWorker:
                 rc.status = PREFETCH_STATUS_QUEUED
                 rc.error_message = ""
             if retry_candidates:
-                db.commit()
+                if not _commit_with_retry(db, f"reset-failed-retry-batch{batch.id}"):
+                    return
 
             # 统计当前活跃任务数(queued + running + ready)
             active_count = (
@@ -355,7 +390,8 @@ class PrefetchWorker:
                     if active_count >= max_lookahead:
                         break
                 if created:
-                    db.commit()
+                    if not _commit_with_retry(db, f"create-queued-batch{batch.id}"):
+                        return
 
             # 收集所有 queued 任务并并行执行
             queued_items = (
@@ -418,7 +454,8 @@ class PrefetchWorker:
             fresh = db.get(MaterialItem, item_id)
             if fresh is None or fresh.status != MATERIAL_STATUS_PENDING:
                 db.delete(pf)
-                db.commit()
+                if not _commit_with_retry(db, f"drop-missing-item-{pf_id}"):
+                    return False
                 return False
             batch = db.get(MaterialBatch, fresh.batch_id)
             owner = db.get(User, batch.owner_id) if batch is not None else None
@@ -435,13 +472,15 @@ class PrefetchWorker:
                 )
             ):
                 db.delete(pf)
-                db.commit()
+                if not _commit_with_retry(db, f"drop-inactive-item-{pf_id}"):
+                    return False
                 return False
 
             pf.status = PREFETCH_STATUS_RUNNING
             pf.attempt_count = (pf.attempt_count or 0) + 1
             pf.next_retry_at = None
-            db.commit()
+            if not _commit_with_retry(db, f"claim-{pf_id}"):
+                return False
 
             stored_path = fresh.stored_path
             original_filename = fresh.original_filename
@@ -490,27 +529,26 @@ class PrefetchWorker:
             re_check = db3.get(MaterialItem, item_id)
             if re_check is None or re_check.status != MATERIAL_STATUS_PENDING:
                 db3.delete(pf)
-                db3.commit()
+                _commit_with_retry(db3, f"drop-stale-result-{pf_id}")
                 return False
             batch = db3.get(MaterialBatch, re_check.batch_id)
             owner = db3.get(User, batch.owner_id) if batch is not None else None
             if batch is None or owner is None or not owner.is_active:
                 db3.delete(pf)
-                db3.commit()
+                _commit_with_retry(db3, f"drop-invalid-result-{pf_id}")
                 return False
 
             new_fp = _get_current_fingerprint()
             if new_fp != fingerprint:
                 db3.delete(pf)
-                db3.commit()
+                _commit_with_retry(db3, f"drop-stale-fingerprint-{pf_id}")
                 return False
 
             pf.status = PREFETCH_STATUS_READY
             pf.result_json = json.dumps(result, ensure_ascii=False)
             pf.error_message = ""
             pf.next_retry_at = None
-            db3.commit()
-            return True
+            return _commit_with_retry(db3, f"save-ready-{pf_id}")
         finally:
             db3.close()
 
@@ -530,7 +568,8 @@ class PrefetchWorker:
                 re_check = db.get(MaterialItem, pf.item_id)
                 if re_check is None or re_check.status != MATERIAL_STATUS_PENDING:
                     db.delete(pf)
-                    db.commit()
+                    if not _commit_with_retry(db, f"drop-failed-missing-item-{pf_id}"):
+                        return
                     return
 
                 attempts = pf.attempt_count or 0
@@ -545,7 +584,7 @@ class PrefetchWorker:
                     pf.status = PREFETCH_STATUS_FAILED
                     pf.error_message = error_message
                     pf.next_retry_at = datetime.utcnow() + timedelta(seconds=delay)
-                db.commit()
+                _commit_with_retry(db, f"mark-failed-{pf_id}")
             finally:
                 db.close()
 
@@ -567,7 +606,7 @@ class PrefetchWorker:
             db.query(MaterialPrefetchResult).filter(
                 MaterialPrefetchResult.status != PREFETCH_STATUS_RUNNING,
             ).delete(synchronize_session=False)
-            db.commit()
+            _commit_with_retry(db, "clear-non-running")
         finally:
             db.close()
 
@@ -578,7 +617,7 @@ class PrefetchWorker:
             db.query(MaterialPrefetchResult).filter(
                 MaterialPrefetchResult.batch_id == batch_id,
             ).delete(synchronize_session=False)
-            db.commit()
+            _commit_with_retry(db, f"clear-batch-{batch_id}")
         finally:
             db.close()
 
@@ -589,7 +628,7 @@ class PrefetchWorker:
             db.query(MaterialPrefetchResult).filter(
                 MaterialPrefetchResult.item_id == item_id,
             ).delete(synchronize_session=False)
-            db.commit()
+            _commit_with_retry(db, f"clear-item-{item_id}")
         finally:
             db.close()
 
@@ -598,7 +637,7 @@ class PrefetchWorker:
         db = SessionLocal()
         try:
             db.query(MaterialPrefetchResult).delete(synchronize_session=False)
-            db.commit()
+            _commit_with_retry(db, "clear-all")
         finally:
             db.close()
 
@@ -609,7 +648,7 @@ class PrefetchWorker:
             db.query(MaterialPrefetchResult).filter(
                 MaterialPrefetchResult.status != PREFETCH_STATUS_RUNNING,
             ).delete(synchronize_session=False)
-            db.commit()
+            _commit_with_retry(db, "invalidate-all")
         finally:
             db.close()
 

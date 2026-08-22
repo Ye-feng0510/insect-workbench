@@ -222,6 +222,17 @@ export interface MaterialSummary {
   quota_exhausted: boolean
 }
 
+export interface MaterialIngestJob {
+  job_id: number
+  status: 'processing' | 'completed' | 'failed'
+  processed_count: number
+  total_planned: number
+  total_count: number
+  error_message: string
+  created_at: string
+  updated_at: string
+}
+
 export interface MaterialPreview {
   item_id: number
   filename: string

@@ -41,6 +41,8 @@ async def lifespan(app: FastAPI):
     maintenance = asyncio.create_task(
         asyncio.to_thread(schedule_startup_maintenance)
     )
+    from app.services.material_ingest_service import recover_interrupted_jobs
+    await asyncio.to_thread(recover_interrupted_jobs)
     worker = PrefetchWorker()
     await worker.start()
     yield

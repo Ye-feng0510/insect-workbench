@@ -454,6 +454,11 @@ PREFETCH_STATUS_RUNNING = "running"
 PREFETCH_STATUS_READY = "ready"
 PREFETCH_STATUS_FAILED = "failed"
 
+# 异步素材摄取任务状态
+INGEST_STATUS_PROCESSING = "processing"
+INGEST_STATUS_COMPLETED = "completed"
+INGEST_STATUS_FAILED = "failed"
+
 
 class MaterialPrefetchResult(Base):
     """后台预加载的模型识别结果缓存。
@@ -484,6 +489,34 @@ class MaterialPrefetchResult(Base):
     next_retry_at: Mapped[datetime | None] = mapped_column(
         DateTime, nullable=True, default=None
     )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        server_default=func.current_timestamp(),
+        onupdate=func.current_timestamp(),
+    )
+
+
+class MaterialIngestJob(Base):
+    """异步素材 ZIP 摄取任务,用于上传后进度与失败状态持久化。"""
+
+    __tablename__ = "material_ingest_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    owner_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    original_filename: Mapped[str] = mapped_column(String(500))
+    source_path: Mapped[str] = mapped_column(String(1000))
+    status: Mapped[str] = mapped_column(
+        String(30), default=INGEST_STATUS_PROCESSING, index=True
+    )
+    processed_count: Mapped[int] = mapped_column(Integer, default=0)
+    total_planned: Mapped[int] = mapped_column(Integer, default=0)
+    total_count: Mapped[int] = mapped_column(Integer, default=0)
+    error_message: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.current_timestamp()
     )

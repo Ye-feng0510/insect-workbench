@@ -2,6 +2,7 @@ import api from './api'
 import type {
   MaterialExtractResponse,
   MaterialItemInfo,
+  MaterialIngestJob,
   MaterialPreview,
   MaterialPreviewWindow,
   MaterialPrefetchStatus,
@@ -32,12 +33,17 @@ export async function listMaterialItems(
   return data
 }
 
-export async function uploadMaterialZip(file: File): Promise<MaterialSummary> {
+export async function uploadMaterialZip(file: File): Promise<MaterialIngestJob> {
   const form = new FormData()
   form.append('file', file)
-  const { data } = await api.post<MaterialSummary>('/materials/upload', form, {
+  const { data } = await api.post<MaterialIngestJob>('/materials/upload', form, {
     timeout: 0,
   })
+  return data
+}
+
+export async function getMaterialIngestJob(jobId: number): Promise<MaterialIngestJob> {
+  const { data } = await api.get<MaterialIngestJob>(`/materials/ingest/${jobId}`)
   return data
 }
 

@@ -9,6 +9,7 @@ import uuid
 import zipfile
 from datetime import datetime
 from pathlib import Path, PurePosixPath
+from collections.abc import Callable
 from typing import Any
 
 from fastapi import HTTPException
@@ -270,6 +271,7 @@ def create_batch_from_zip_path(
     source_path: Path,
     original_filename: str,
     owner_id: int,
+    progress_cb: Callable[[int, int], None] | None = None,
 ) -> dict[str, Any]:
     if Path(original_filename).suffix.lower() != ".zip":
         raise HTTPException(status_code=400, detail="请上传 ZIP 格式的素材压缩包")
@@ -299,8 +301,11 @@ def create_batch_from_zip_path(
                 detail="压缩包中没有支持的图片,请放入 JPG/JPEG/PNG/WebP 文件",
             )
 
+        total_members = len(members)
+        if progress_cb is not None:
+            progress_cb(0, total_members)
         extract_dir.mkdir(parents=True, exist_ok=False)
-        for info, archive_path in members:
+        for processed_index, (info, archive_path) in enumerate(members, start=1):
             suffix = PurePosixPath(archive_path).suffix.lower()
             stored_name = f"material_{uuid.uuid4().hex}{suffix}"
             stored_path = extract_dir / stored_name
@@ -330,6 +335,8 @@ def create_batch_from_zip_path(
                     "stored_path": str(stored_path),
                 }
             )
+            if progress_cb is not None:
+                progress_cb(processed_index, total_members)
 
         if not extracted:
             raise HTTPException(status_code=400, detail="压缩包中没有可读取的有效图片")

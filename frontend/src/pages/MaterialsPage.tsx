@@ -19,13 +19,14 @@ import Loading from '@/components/Loading'
 import { useToast } from '@/components/Toast'
 import {
   deleteMaterialBatch,
+  getMaterialIngestJob,
   getMaterialSummary,
   listMaterialItems,
   skippedMaterialsExportUrl,
   uploadMaterialZip,
 } from '@/services/materials'
 import { extractErrorMessage } from '@/types'
-import type { MaterialItemInfo, MaterialSummary } from '@/types'
+import type { MaterialIngestJob, MaterialItemInfo, MaterialSummary } from '@/types'
 import { downloadAuthenticatedAsset } from '@/services/assets'
 
 export default function MaterialsPage() {
@@ -37,6 +38,7 @@ export default function MaterialsPage() {
   const [skippedItems, setSkippedItems] = useState<MaterialItemInfo[]>([])
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
+  const [ingestProgress, setIngestProgress] = useState<MaterialIngestJob | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [downloadingSkipped, setDownloadingSkipped] = useState(false)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
@@ -82,7 +84,18 @@ export default function MaterialsPage() {
     }
     setUploading(true)
     try {
-      const data = await uploadMaterialZip(file)
+      const job = await uploadMaterialZip(file)
+      setIngestProgress(job)
+      let current = job
+      while (current.status === 'processing') {
+        await new Promise((resolve) => window.setTimeout(resolve, 1500))
+        current = await getMaterialIngestJob(job.job_id)
+        setIngestProgress(current)
+      }
+      if (current.status === 'failed') {
+        throw new Error(current.error_message || '素材压缩包解析失败')
+      }
+      const data = await getMaterialSummary()
       setSummary(data)
       setSkippedItems([])
       show(`素材包上传成功,共发现 ${data.total_count} 张有效图片`, 'success')
@@ -91,6 +104,7 @@ export default function MaterialsPage() {
     } finally {
       uploadingRef.current = false
       setUploading(false)
+      setIngestProgress(null)
     }
   }
 
@@ -223,9 +237,15 @@ export default function MaterialsPage() {
                 <>
                   <Loader2 className="mb-3 h-10 w-10 animate-spin text-emerald-600" />
                   <p className="text-sm font-medium text-emerald-700">
-                    正在上传、检查并解压素材...
+                    {ingestProgress?.status === 'processing'
+                      ? '文件已收取,正在后台解析素材...'
+                      : '正在上传素材...'}
                   </p>
-                  <p className="mt-1 text-xs text-gray-400">图片较多时请耐心等待</p>
+                  <p className="mt-1 text-xs text-gray-400">
+                    {ingestProgress && ingestProgress.total_planned > 0
+                      ? `已解析 ${ingestProgress.processed_count}/${ingestProgress.total_planned} 张`
+                      : '图片较多时请耐心等待'}
+                  </p>
                 </>
               ) : (
                 <>
