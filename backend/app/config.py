@@ -81,7 +81,7 @@ class Settings(BaseSettings):
 
     # 后台预加载(减少工作台图片切换等待时间)
     material_prefetch_size: int = 30  # ready 低水位(目标保持多少张已就绪)
-    material_prefetch_concurrency: int = 3  # 前三张优先并行,之后动态降低并发
+    material_prefetch_concurrency: int = 2  # 后台并行数(v1.3.10 默认 2:产能富余 6~10 倍且不挤占前台)
     material_prefetch_max_concurrency: int = 3  # 低配置电脑最多并行三张
     material_prefetch_max_lookahead: int = 30  # 最大前瞻排队数(含running/ready/failed)
     material_prefetch_interval: float = 1.0  # worker 轮询间隔(秒)
@@ -130,6 +130,23 @@ class Settings(BaseSettings):
     # 内存压力迟滞:低于 resource_memory_pressure_mb 暂停后台;
     # 恢复需回升至 暂停阈值+该余量(0=与暂停阈值相同,退回旧行为)
     resource_memory_resume_headroom_mb: float = 256.0
+
+    # v1.3.10 前台/后台协同
+    # 前台对 queued 预载任务的等待窗口,超时后前台接管(取消后台,零重复调用)
+    material_prefetch_foreground_wait_seconds: float = 8.0
+    # running 预载任务超过该时长视为卡死,前台取消接管
+    material_prefetch_stuck_threshold_seconds: float = 60.0
+    # 后台预载最多同时占用的识别槽位数(>=槽位数时不限制,退回旧行为)
+    resource_background_max_slots: int = 1
+    # 后台预载模型调用的独立超时(前台仍用 model_timeout_seconds)
+    model_background_timeout_seconds: int = 45
+
+    # 共享 httpx 连接池(进程级复用,避免每次请求重建 TLS 连接)
+    model_http_max_connections: int = 10
+    model_http_max_keepalive_connections: int = 5
+
+    # 应用日志级别(DEBUG/INFO/WARNING):INFO 可输出 REC_TELEMETRY 分段计时等运维日志
+    log_level: str = "INFO"
 
     # 开发模式: 前端独立运行时允许跨域
     cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]

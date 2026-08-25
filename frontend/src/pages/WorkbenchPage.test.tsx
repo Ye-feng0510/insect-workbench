@@ -108,6 +108,8 @@ describe('WorkbenchPage material preview', () => {
       ready_count: 0,
       running_count: 0,
       failed_count: 0,
+      queued_count: 0,
+      pending_count: 0,
       target: 20,
     })
   })

@@ -14,6 +14,16 @@ from app.config import settings
 from app.services.model_provider import ModelError, VisionModelClient
 
 
+@pytest.fixture(autouse=True)
+def _reset_shared_http_pool():
+    """共享连接池单例按测试隔离:每个用例前后都丢弃当前实例。"""
+    from app.services import model_http
+
+    model_http.reset_http_client_for_tests()
+    yield
+    model_http.reset_http_client_for_tests()
+
+
 class FakeResponse:
     def __init__(self, payload: dict, status_code: int = 200):
         self._payload = payload
@@ -44,9 +54,10 @@ def make_response(
 class FakeAsyncClient:
     """按预设序列返回响应,并捕获每次请求的 payload。"""
 
-    def __init__(self, responses: list, captured: list, timeout=None):
+    def __init__(self, responses: list, captured: list, timeout=None, limits=None):
         self._responses = responses
         self._captured = captured
+        self.is_closed = False
 
     async def __aenter__(self):
         return self
@@ -54,7 +65,7 @@ class FakeAsyncClient:
     async def __aexit__(self, *args):
         return False
 
-    async def post(self, url, json=None, headers=None):
+    async def post(self, url, json=None, headers=None, timeout=None):
         # 深拷贝快照:_chat 会原地放大 payload["max_tokens"],
         # 引用同一 dict 会让所有快照显示最终值
         self._captured.append({"url": url, "json": dict(json), "headers": headers})
@@ -87,7 +98,7 @@ class TestNonReasoningRegression:
         ]
         monkeypatch.setattr(
             httpx, "AsyncClient",
-            lambda timeout=None: FakeAsyncClient(responses, captured),
+            lambda timeout=None, limits=None: FakeAsyncClient(responses, captured),
         )
         assert run_chat(client) == '{"主色调":"红色"}'
         assert len(captured) == 1
@@ -99,7 +110,7 @@ class TestNonReasoningRegression:
         responses = [httpx.ConnectError("boom")] * 3
         monkeypatch.setattr(
             httpx, "AsyncClient",
-            lambda timeout=None: FakeAsyncClient(responses, captured),
+            lambda timeout=None, limits=None: FakeAsyncClient(responses, captured),
         )
         with pytest.raises(ModelError, match="模型连接失败\\(重试3次后\\)"):
             run_chat(client)
@@ -119,7 +130,7 @@ class TestReasoningBudgetEscalation:
         ]
         monkeypatch.setattr(
             httpx, "AsyncClient",
-            lambda timeout=None: FakeAsyncClient(responses, captured),
+            lambda timeout=None, limits=None: FakeAsyncClient(responses, captured),
         )
         assert run_chat(client, max_tokens=50) == '{"主色调":"红色"}'
         assert len(captured) == 2
@@ -139,7 +150,7 @@ class TestReasoningBudgetEscalation:
         ]
         monkeypatch.setattr(
             httpx, "AsyncClient",
-            lambda timeout=None: FakeAsyncClient(responses, captured),
+            lambda timeout=None, limits=None: FakeAsyncClient(responses, captured),
         )
         assert run_chat(client, max_tokens=7000) == "ok"
         assert captured[1]["json"]["max_tokens"] == settings.model_reasoning_max_tokens
@@ -150,7 +161,7 @@ class TestReasoningBudgetEscalation:
         responses = [make_response(content="")] * 3
         monkeypatch.setattr(
             httpx, "AsyncClient",
-            lambda timeout=None: FakeAsyncClient(responses, captured),
+            lambda timeout=None, limits=None: FakeAsyncClient(responses, captured),
         )
         with pytest.raises(ModelError) as exc_info:
             run_chat(client, max_tokens=1024)
@@ -172,7 +183,7 @@ class TestReasoningBudgetEscalation:
         ]
         monkeypatch.setattr(
             httpx, "AsyncClient",
-            lambda timeout=None: FakeAsyncClient(responses, captured),
+            lambda timeout=None, limits=None: FakeAsyncClient(responses, captured),
         )
         assert run_chat(client, max_tokens=50) == "ok"
         assert len(captured) == 3
@@ -188,7 +199,7 @@ class TestEmptyWithoutReasoning:
         ]
         monkeypatch.setattr(
             httpx, "AsyncClient",
-            lambda timeout=None: FakeAsyncClient(responses, captured),
+            lambda timeout=None, limits=None: FakeAsyncClient(responses, captured),
         )
         with pytest.raises(ModelError) as exc_info:
             run_chat(client)
@@ -202,7 +213,7 @@ class TestEmptyWithoutReasoning:
         responses = [make_response(content="", finish_reason="content_filter")]
         monkeypatch.setattr(
             httpx, "AsyncClient",
-            lambda timeout=None: FakeAsyncClient(responses, captured),
+            lambda timeout=None, limits=None: FakeAsyncClient(responses, captured),
         )
         with pytest.raises(ModelError, match="finish_reason=content_filter"):
             run_chat(client)

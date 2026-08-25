@@ -62,6 +62,15 @@ def run_write_with_retry(operation: Callable[[], T], log_label: str = "db-write"
         raise
 
 
+def run_read_with_retry(operation: Callable[[], T], log_label: str = "db-read") -> T:
+    """读取查询:SQLite 锁冲突时按退避序列重试。
+
+    与写入版语义一致;operation 内部应在捕获锁冲突前自行回滚会话。
+    最终仍失败时抛出 DatabaseUnavailableError(全局映射为 503)。
+    """
+    return run_write_with_retry(operation, log_label=log_label)
+
+
 async def run_write_with_retry_async(
     operation: Callable[[], T],
     log_label: str = "db-write",

@@ -18,6 +18,8 @@ from typing import Any
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+import time
+
 from app.config import IMAGES_DIR, PROCESSED_IMAGES_DIR, settings
 from app.field_mapping import (
     COLUMN_TO_FIELD,
@@ -45,6 +47,7 @@ from app.models import (
 from app.routers.settings import _get_or_create_settings
 from app.services.model_provider import ModelError, VisionModelClient
 from app.services import ocr_service, quota_service
+from app.services.recognition_telemetry import Telemetry
 
 
 def _load_prompt(db: Session, attr: str, default_filename: str) -> str:
@@ -74,15 +77,18 @@ def _load_recognition_prompt(db: Session) -> str:
     return f"{base.rstrip()}\n\n{contract}"
 
 
-def _get_model_client(db: Session) -> VisionModelClient:
-    """从已保存配置创建模型客户端。"""
+def _get_model_client(db: Session, timeout: int | None = None) -> VisionModelClient:
+    """从已保存配置创建模型客户端。
+
+    timeout 为 None 时使用前台默认超时;后台预载可传独立短超时。
+    """
     s = _get_or_create_settings(db)
     if not s.base_url or not s.api_key or not s.model_name:
         raise HTTPException(
             status_code=400,
             detail="尚未配置模型 API,请先在设置页面配置 Base URL、API Key 和模型名称",
         )
-    return VisionModelClient(s.base_url, s.api_key, s.model_name)
+    return VisionModelClient(s.base_url, s.api_key, s.model_name, timeout=timeout)
 
 
 async def recognize_image_with_ocr(
@@ -90,15 +96,25 @@ async def recognize_image_with_ocr(
     image_path: str,
     prompt: str,
     rotation_degrees: int = 0,
+    telemetry: Telemetry | None = None,
 ) -> dict[str, Any]:
-    """以本地 OCR 作为证据调用视觉模型，OCR 失败时自动回退。"""
+    """以本地 OCR 作为证据调用视觉模型，OCR 失败时自动回退。
+
+    telemetry 可选注入:分段耗时由调用方在 finally 中 emit。
+    """
+    if telemetry is None:
+        telemetry = Telemetry()
     ocr_result: dict[str, Any] = {"lines": [], "warnings": []}
     if settings.ocr_enabled:
-        ocr_result = await asyncio.to_thread(
-            ocr_service.recognize_text,
-            image_path,
-            rotation_degrees,
-        )
+        t_ocr = time.monotonic()
+        try:
+            ocr_result = await asyncio.to_thread(
+                ocr_service.recognize_text,
+                image_path,
+                rotation_degrees,
+            )
+        finally:
+            telemetry.ocr_ms = (time.monotonic() - t_ocr) * 1000.0
         ocr_result["lines"] = [
             line
             for line in ocr_result.get("lines", [])
@@ -109,6 +125,7 @@ async def recognize_image_with_ocr(
         prompt,
         rotation_degrees,
         ocr_result=ocr_result,
+        telemetry=telemetry,
     )
     result["_ocr"] = ocr_result
     return result
@@ -219,6 +236,7 @@ async def extract_image_info(
             raise ValueError("owner_id is required for a new record")
         record = SpecimenRecord(owner_id=owner_id)
         db.add(record)
+    telemetry = Telemetry(path="foreground", owner_id=record.owner_id)
     record.image_filename = image_filename
     record.image_path = image_path
     record.rotation_degrees = rotation_degrees % 360
@@ -229,6 +247,7 @@ async def extract_image_info(
 
     if precomputed_result is not None:
         result = precomputed_result
+        telemetry.cache_hit = True
     else:
         client = _get_model_client(db)
         prompt = _load_recognition_prompt(db)
@@ -239,14 +258,18 @@ async def extract_image_info(
 
             async with get_scheduler().slot(priority="foreground"):
                 result = await recognize_image_with_ocr(
-                    client, image_path, prompt, rotation_degrees
+                    client, image_path, prompt, rotation_degrees, telemetry=telemetry
                 )
         except ModelError as e:
+            telemetry.error = f"model_error: {e}"
             record.status = STATUS_EXTRACTION_FAILED
             record.warnings_json = json.dumps([str(e)], ensure_ascii=False)
             quota_service.release(db, record.id)
             db.commit()
             raise HTTPException(status_code=502, detail=f"图片识别失败: {e}")
+        except Exception as e:
+            telemetry.error = f"{type(e).__name__}: {e}"
+            raise
 
     ocr_result = result.pop("_ocr", {"lines": [], "warnings": []})
     record.ocr_result_json = json.dumps(ocr_result, ensure_ascii=False)
@@ -275,8 +298,11 @@ async def extract_image_info(
     record.scientific_name_authorship = extracted["命名人"][:300]
 
     record.status = STATUS_AWAITING_CONFIRMATION
+    t_commit = time.monotonic()
     db.commit()
+    telemetry.db_commit_ms = (time.monotonic() - t_commit) * 1000.0
     db.refresh(record)
+    telemetry.emit()
     return record
 
 

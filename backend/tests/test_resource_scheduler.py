@@ -37,8 +37,9 @@ def test_foreground_preempts_waiting_background():
     asyncio.run(scenario())
 
 
-def test_concurrency_preserved_all_slots_usable():
-    """资源充足时,全部并发槽位可同时被后台占用(保留并发能力)。"""
+def test_concurrency_preserved_all_slots_usable(monkeypatch):
+    """资源充足且未配置后台上限时,全部并发槽位可同时被后台占用(保留并发能力)。"""
+    monkeypatch.setattr(rs.settings, "resource_background_max_slots", 3)
     scheduler = rs.ResourceScheduler(slots=3)
 
     async def scenario():
@@ -47,7 +48,67 @@ def test_concurrency_preserved_all_slots_usable():
                 async with scheduler.slot(priority="background"):
                     stats = scheduler.stats()
                     assert stats.background_active == 3
+                    assert stats.background_max == 3
         assert scheduler.stats().background_active == 0
+
+    asyncio.run(scenario())
+
+
+def test_background_slot_cap_limits_parallel_background(monkeypatch):
+    """v1.3.10 后台槽位上限:后台最多占用 background_max 个槽位,其余排队。"""
+    monkeypatch.setattr(rs.settings, "resource_background_max_slots", 1)
+    scheduler = rs.ResourceScheduler(slots=3)
+
+    async def scenario():
+        # 第一个后台任务获得槽位
+        await scheduler.acquire(priority="background")
+        assert scheduler.stats().background_active == 1
+
+        # 第二个后台任务必须等待(即使还有 2 个空槽位)
+        async def bg2_acquire():
+            await scheduler.acquire(priority="background")
+            scheduler.release(priority="background")
+
+        bg2 = asyncio.create_task(bg2_acquire())
+        await asyncio.sleep(0.05)
+        assert not bg2.done(), "后台占用达到上限时,新后台任务应等待"
+
+        # 前台不受上限影响,立即获得槽位
+        await scheduler.acquire(priority="foreground")
+        scheduler.release(priority="foreground")
+
+        scheduler.release(priority="background")
+        await bg2
+        assert scheduler.stats().background_active == 0
+
+    asyncio.run(scenario())
+
+
+def test_foreground_waiting_gates_new_background(monkeypatch):
+    """v1.3.10 前台门禁:有前台在等时,空闲槽位也不发给新后台任务。"""
+    monkeypatch.setattr(rs.settings, "resource_background_max_slots", 3)
+    scheduler = rs.ResourceScheduler(slots=1)
+
+    async def scenario():
+        # 唯一槽位被后台占用
+        await scheduler.acquire(priority="background")
+        # 前台排队
+        async def fg_acquire():
+            await scheduler.acquire(priority="foreground")
+            scheduler.release(priority="foreground")
+
+        fg = asyncio.create_task(fg_acquire())
+        await asyncio.sleep(0.02)
+        assert scheduler.stats().foreground_waiting == 1
+        # 空闲判定:槽位仍被后台占用,但等待者存在即验证唤醒顺序
+        # 释放后台槽位:必须先唤醒前台,而不是让新后台拿走
+        scheduler.release(priority="background")
+        await fg
+        assert scheduler.stats().foreground_active == 0
+
+        # 前台等待消失后,后台可再次获得槽位
+        async with scheduler.slot(priority="background"):
+            assert scheduler.stats().background_active == 1
 
     asyncio.run(scenario())
 

@@ -475,6 +475,109 @@ def _copy_for_recognition(item: MaterialItem) -> str:
     return str(target)
 
 
+async def _consume_ready_result(
+    db: Session,
+    item: MaterialItem,
+    pf: MaterialPrefetchResult,
+    rotation_degrees: int,
+    owner_id: int,
+) -> tuple[MaterialItem, SpecimenRecord]:
+    """消费 ready 预载结果;预载结果无效时回退同记录的正常识别。
+
+    识别彻底失败时抛出原异常(调用方统一走失败处理)。
+    """
+    image_path = _copy_for_recognition(item)
+    record = SpecimenRecord(
+        owner_id=owner_id,
+        image_filename=item.original_filename,
+        image_path=image_path,
+        rotation_degrees=rotation_degrees % 360,
+    )
+    db.add(record)
+    db.flush()
+    item.record_id = record.id
+    item.status = MATERIAL_STATUS_PROCESSING
+    item.error_message = ""
+    from app.services import quota_service
+    try:
+        quota_service.reserve(db, owner_id, record.id)
+    except Exception:
+        Path(image_path).unlink(missing_ok=True)
+        raise
+    try:
+        precomputed = json.loads(pf.result_json)
+        db.delete(pf)
+        db.commit()
+        record = await recognition_service.extract_image_info(
+            db,
+            image_path,
+            item.original_filename,
+            rotation_degrees,
+            record=record,
+            precomputed_result=precomputed,
+        )
+        _notify_prefetch_worker()
+        return item, record
+    except Exception:
+        if pf in db:
+            db.delete(pf)
+            db.commit()
+        # 预载结果无效,回退正常识别(复用同一记录,不产生冗余草稿)
+        try:
+            record = await recognition_service.extract_image_info(
+                db,
+                image_path,
+                item.original_filename,
+                rotation_degrees,
+                record=record,
+            )
+            _notify_prefetch_worker()
+            return item, record
+        except Exception as exc:
+            _handle_extraction_failure(db, record, item, exc)
+            raise
+
+
+async def _wait_for_prefetch_ready(
+    db: Session,
+    pf_id: int,
+) -> MaterialPrefetchResult | str:
+    """状态感知等待预载结果(v1.3.10,替代 120 秒盲等)。
+
+    - READY   → 返回 pf 对象(调用方消费)
+    - QUEUED  → 等待 foreground_wait_seconds 窗口,超窗返回 "takeover"
+    - RUNNING → 正常等它收尾(在途调用已完成大半,等比重发快);
+                超过 stuck_threshold 判定卡死,返回 "takeover"
+    - FAILED / 行消失 → "takeover"(保留旧的失败回退语义)
+    """
+    poll_seconds = 0.5
+    queued_waited = 0.0
+    while True:
+        await asyncio.sleep(poll_seconds)
+        db.expire_all()
+        pf = db.get(MaterialPrefetchResult, pf_id)
+        if pf is None:
+            return "takeover"
+        if pf.status == PREFETCH_STATUS_READY and pf.result_json:
+            return pf
+        if pf.status == PREFETCH_STATUS_FAILED:
+            return "takeover"
+        if pf.status == PREFETCH_STATUS_QUEUED:
+            queued_waited += poll_seconds
+            if queued_waited >= settings.material_prefetch_foreground_wait_seconds:
+                return "takeover"
+        elif pf.status == PREFETCH_STATUS_RUNNING:
+            # updated_at 在领取(queued→running)时刷新,作为卡死判定起点
+            claimed_at = pf.updated_at
+            running_for = (
+                (datetime.utcnow() - claimed_at).total_seconds()
+                if claimed_at is not None
+                else 0.0
+            )
+            if running_for >= settings.material_prefetch_stuck_threshold_seconds:
+                return "takeover"
+
+
 async def start_next_item(
     db: Session,
     rotation_degrees: int = 0,
@@ -521,7 +624,7 @@ async def start_next_item(
     except Exception:
         pass
 
-    # 如果有 ready 且指纹匹配，直接消费
+    # 如果有 ready 且指纹匹配，直接消费(秒开路径)
     if (
         pf is not None
         and pf.status == PREFETCH_STATUS_READY
@@ -529,118 +632,33 @@ async def start_next_item(
         and pf.rotation_degrees == rotation_degrees % 360
         and (current_fp is None or pf.config_fingerprint == current_fp)
     ):
-        image_path = _copy_for_recognition(item)
-        record = SpecimenRecord(
-            owner_id=owner_id,
-            image_filename=item.original_filename,
-            image_path=image_path,
-            rotation_degrees=rotation_degrees % 360,
-        )
-        db.add(record)
-        db.flush()
-        item.record_id = record.id
-        item.status = MATERIAL_STATUS_PROCESSING
-        item.error_message = ""
-        from app.services import quota_service
-        try:
-            quota_service.reserve(db, owner_id, record.id)
-        except Exception:
-            Path(image_path).unlink(missing_ok=True)
-            raise
+        return await _consume_ready_result(db, item, pf, rotation_degrees, owner_id)
 
-        try:
-            precomputed = json.loads(pf.result_json)
-            db.delete(pf)
-            db.commit()
-            record = await recognition_service.extract_image_info(
-                db,
-                image_path,
-                item.original_filename,
-                rotation_degrees,
-                record=record,
-                precomputed_result=precomputed,
-            )
-            _notify_prefetch_worker()
-            return item, record
-        except Exception:
-            if pf in db:
-                db.delete(pf)
-                db.commit()
-            # 回退到正常识别（record 已创建）
-            try:
-                record = await recognition_service.extract_image_info(
-                    db,
-                    image_path,
-                    item.original_filename,
-                    rotation_degrees,
-                    record=record,
-                )
-                _notify_prefetch_worker()
-                return item, record
-            except Exception as exc:
-                _handle_extraction_failure(db, record, item, exc)
-                raise
-
-    # 如果正在预加载(running/queued)，等待它完成（最多120秒），避免重复调用模型
+    # 如果正在预加载(running/queued),状态感知等待:ready 消费,超窗/卡死接管
     if (
         pf is not None
         and pf.rotation_degrees == rotation_degrees % 360
         and pf.status in (PREFETCH_STATUS_RUNNING, PREFETCH_STATUS_QUEUED)
     ):
         pf_id = pf.id
-        waited = 0
-        max_wait = settings.model_timeout_seconds
-        while waited < max_wait:
-            await asyncio.sleep(0.5)
-            waited += 0.5
+        outcome = await _wait_for_prefetch_ready(db, pf_id)
+        if not isinstance(outcome, str):
+            return await _consume_ready_result(
+                db, item, outcome, rotation_degrees, owner_id
+            )
+        # 接管:取消在途后台任务(零重复模型调用)后走冷路径
+        from app.services.prefetch_service import request_takeover
+
+        takeover = await request_takeover(pf_id)
+        if takeover == "ready":
             db.expire_all()
-            pf_refresh = db.get(MaterialPrefetchResult, pf_id)
-            if pf_refresh is None:
-                break
-            if pf_refresh.status == PREFETCH_STATUS_READY and pf_refresh.result_json:
-                image_path = _copy_for_recognition(item)
-                record = SpecimenRecord(
-                    owner_id=owner_id,
-                    image_filename=item.original_filename,
-                    image_path=image_path,
-                    rotation_degrees=rotation_degrees % 360,
+            pf_ready = db.get(MaterialPrefetchResult, pf_id)
+            if pf_ready is not None:
+                return await _consume_ready_result(
+                    db, item, pf_ready, rotation_degrees, owner_id
                 )
-                db.add(record)
-                db.flush()
-                item.record_id = record.id
-                item.status = MATERIAL_STATUS_PROCESSING
-                item.error_message = ""
-                from app.services import quota_service
-                try:
-                    quota_service.reserve(db, owner_id, record.id)
-                except Exception:
-                    Path(image_path).unlink(missing_ok=True)
-                    raise
 
-                try:
-                    precomputed = json.loads(pf_refresh.result_json)
-                    db.delete(pf_refresh)
-                    db.commit()
-                    record = await recognition_service.extract_image_info(
-                        db,
-                        image_path,
-                        item.original_filename,
-                        rotation_degrees,
-                        record=record,
-                        precomputed_result=precomputed,
-                    )
-                    _notify_prefetch_worker()
-                    return item, record
-                except Exception:
-                    if pf_refresh in db:
-                        db.delete(pf_refresh)
-                        db.commit()
-                    # 缓存无效，回退到正常识别
-                    break  # 继续到下面的正常识别流程
-            elif pf_refresh.status == PREFETCH_STATUS_FAILED:
-                break  # 预加载失败，回退到正常识别
-
-    # 正常同步识别（无缓存、缓存无效或预加载失败时）
+    # 正常同步识别(无缓存、缓存无效、预加载失败或前台接管后)
     image_path = _copy_for_recognition(item)
     record = SpecimenRecord(
         owner_id=owner_id,
@@ -845,21 +863,50 @@ def delete_batch(db: Session, owner_id: int) -> dict[str, Any]:
 
 
 def get_prefetch_status(db: Session, owner_id: int) -> dict[str, Any]:
-    """获取当前批次的预加载状态统计。"""
-    batch = get_active_batch(db, owner_id)
-    if batch is None:
-        return {"ready_count": 0, "running_count": 0, "failed_count": 0, "target": settings.material_prefetch_size}
+    """获取当前批次的预加载状态统计(v1.3.10:读重试 + queued/pending 计数)。"""
+    from sqlalchemy.exc import OperationalError
 
-    rows = (
-        db.query(MaterialPrefetchResult.status, func.count(MaterialPrefetchResult.id))
-        .filter(MaterialPrefetchResult.batch_id == batch.id)
-        .group_by(MaterialPrefetchResult.status)
-        .all()
-    )
-    counts = {status: count for status, count in rows}
-    return {
-        "ready_count": counts.get(PREFETCH_STATUS_READY, 0),
-        "running_count": counts.get("running", 0),
-        "failed_count": counts.get(PREFETCH_STATUS_FAILED, 0),
-        "target": settings.material_prefetch_size,
-    }
+    from app.db_retry import run_read_with_retry
+
+    def _query() -> dict[str, Any]:
+        try:
+            batch = get_active_batch(db, owner_id)
+            if batch is None:
+                return {
+                    "ready_count": 0,
+                    "running_count": 0,
+                    "queued_count": 0,
+                    "failed_count": 0,
+                    "pending_count": 0,
+                    "target": settings.material_prefetch_size,
+                }
+
+            rows = (
+                db.query(MaterialPrefetchResult.status, func.count(MaterialPrefetchResult.id))
+                .filter(MaterialPrefetchResult.batch_id == batch.id)
+                .group_by(MaterialPrefetchResult.status)
+                .all()
+            )
+            counts = {status: count for status, count in rows}
+            pending = (
+                db.query(func.count(MaterialItem.id))
+                .filter(
+                    MaterialItem.batch_id == batch.id,
+                    MaterialItem.status == MATERIAL_STATUS_PENDING,
+                )
+                .scalar()
+                or 0
+            )
+            return {
+                "ready_count": counts.get(PREFETCH_STATUS_READY, 0),
+                "running_count": counts.get(PREFETCH_STATUS_RUNNING, 0),
+                "queued_count": counts.get(PREFETCH_STATUS_QUEUED, 0),
+                "failed_count": counts.get(PREFETCH_STATUS_FAILED, 0),
+                "pending_count": int(pending),
+                "target": settings.material_prefetch_size,
+            }
+        except OperationalError:
+            db.rollback()
+            raise
+
+    return run_read_with_retry(_query, log_label="prefetch-status")

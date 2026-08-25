@@ -615,10 +615,16 @@ export default function WorkbenchPage() {
                         已预加载 {prefetchStatus.ready_count}/{prefetchStatus.target} 张
                       </div>
                     )}
-                    {prefetchStatus && prefetchStatus.running_count > 0 && prefetchStatus.ready_count === 0 && (
+                    {prefetchStatus && prefetchStatus.running_count > 0 && (
                       <div className="flex items-center gap-1 text-xs text-blue-600">
                         <Loader2 className="h-3 w-3 animate-spin" />
-                        正在预加载...
+                        后台识别中 {prefetchStatus.running_count} 张
+                      </div>
+                    )}
+                    {prefetchStatus && prefetchStatus.queued_count > 0 && (
+                      <div className="flex items-center gap-1 text-xs text-amber-600">
+                        <Loader2 className="h-3 w-3" />
+                        排队等待 {prefetchStatus.queued_count} 张
                       </div>
                     )}
                     <button

@@ -38,6 +38,7 @@ class SchedulerStats:
     foreground_waiting: int = 0
     background_waiting: int = 0
     memory_paused: bool = False
+    background_max: int = 0
 
 
 class ResourceScheduler:
@@ -49,6 +50,14 @@ class ResourceScheduler:
 
     def __init__(self, slots: int | None = None) -> None:
         self.slots = slots if slots and slots > 0 else settings.resource_recognition_slots
+        # v1.3.10 后台槽位上限:后台预载不能占满全部识别槽位,
+        # 保证前台(用户手动识别)永远有空位可用。
+        # 配置 >= 总槽位时视为不限制,退回旧行为(兼容扩展)。
+        self.background_max = (
+            min(settings.resource_background_max_slots, self.slots)
+            if settings.resource_background_max_slots > 0
+            else self.slots
+        )
         self._foreground_active = 0
         self._background_active = 0
         self._waiters: list[_Waiter] = []
@@ -132,11 +141,24 @@ class ResourceScheduler:
     # 槽位获取与释放
     # ============================================================
 
+    def _foreground_waiting(self) -> bool:
+        """是否存在等待中的前台任务。"""
+        return any(
+            w.priority == "foreground" and not w.future.done() for w in self._waiters
+        )
+
     def _can_grant(self, priority: str) -> bool:
         if self._active >= self.slots:
             return False
-        if priority == "background" and self._memory_paused():
-            return False
+        if priority == "background":
+            if self._memory_paused():
+                return False
+            # 后台占用上限:超过后不再发放新槽位
+            if self._background_active >= self.background_max:
+                return False
+            # 前台门禁:有前台在等时,新后台任务让位(已发出请求的不可抢占)
+            if self._foreground_waiting():
+                return False
         return True
 
     def _wake_next(self) -> None:
@@ -145,11 +167,14 @@ class ResourceScheduler:
         while self._active < self.slots:
             foreground = [w for w in pending if w.priority == "foreground"]
             background = [w for w in pending if w.priority == "background"]
-            candidates = foreground or background
+            # 有前台等待时只考虑前台(门禁在唤醒侧同样生效)
+            candidates = foreground or ([] if self._foreground_waiting() else background)
             if not candidates:
                 break
             waiter = min(candidates, key=lambda w: w.seq)
-            if waiter.priority == "background" and self._memory_paused():
+            if waiter.priority == "background" and (
+                self._memory_paused() or self._background_active >= self.background_max
+            ):
                 break
             self._waiters.remove(waiter)
             pending.remove(waiter)
@@ -199,6 +224,7 @@ class ResourceScheduler:
             foreground_waiting=sum(1 for w in pending if w.priority == "foreground"),
             background_waiting=sum(1 for w in pending if w.priority == "background"),
             memory_paused=self._memory_paused(),
+            background_max=self.background_max,
         )
 
     # ============================================================

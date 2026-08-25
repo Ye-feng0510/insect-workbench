@@ -14,12 +14,15 @@ import base64
 import io
 import json
 import re
+import time
 from typing import Any
 
 import httpx
 from PIL import Image, ImageOps
 
 from app.config import settings
+from app.services.model_http import get_http_client
+from app.services.recognition_telemetry import Telemetry
 
 
 class ModelError(Exception):
@@ -68,8 +71,12 @@ class VisionModelClient:
         返回按字母排序的模型 ID 列表。
         """
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.get(self._models_url, headers=self._headers)
+            client = get_http_client()
+            resp = await client.get(
+                self._models_url,
+                headers=self._headers,
+                timeout=30,
+            )
         except (httpx.TimeoutException, httpx.ConnectError) as e:
             raise ModelError(f"连接失败,请检查 Base URL: {e}") from e
 
@@ -98,8 +105,12 @@ class VisionModelClient:
         self,
         messages: list[dict[str, Any]],
         max_tokens: int = 2000,
+        telemetry: Telemetry | None = None,
     ) -> str:
-        """发送 chat completions 请求,返回模型文本内容。"""
+        """发送 chat completions 请求,返回模型文本内容。
+
+        使用进程级共享连接池(免每次 TLS 重建),超时按本次调用覆写。
+        """
         payload = {
             "model": self.model_name,
             "messages": messages,
@@ -114,13 +125,21 @@ class VisionModelClient:
         # 时按倍数放大 max_tokens 重试,判断只依赖协议字段,不区分供应商。
         escalations_left = settings.model_reasoning_max_escalations
         attempt = 0
+        client = get_http_client()
         while attempt < retries:
             try:
-                async with httpx.AsyncClient(timeout=self.timeout) as client:
-                    resp = await client.post(
-                        self._chat_url,
-                        json=payload,
-                        headers=self._headers,
+                t0 = time.monotonic()
+                resp = await client.post(
+                    self._chat_url,
+                    json=payload,
+                    headers=self._headers,
+                    timeout=self.timeout,
+                )
+                if telemetry is not None:
+                    telemetry.model_attempts += 1
+                    telemetry.model_http_ms = (
+                        (telemetry.model_http_ms or 0.0)
+                        + (time.monotonic() - t0) * 1000.0
                     )
                 if resp.status_code != 200:
                     body = resp.text[:500]
@@ -146,6 +165,8 @@ class VisionModelClient:
                         settings.model_reasoning_max_tokens,
                     )
                     escalations_left -= 1
+                    if telemetry is not None:
+                        telemetry.reasoning_escalations += 1
                     continue
 
                 if not content:
@@ -226,12 +247,16 @@ class VisionModelClient:
         prompt: str,
         rotation_degrees: int = 0,
         ocr_result: dict[str, Any] | None = None,
+        telemetry: Telemetry | None = None,
     ) -> dict[str, Any]:
         """调用视觉模型提取图片信息,返回解析后的 JSON 字典。"""
         # PIL 预处理放入线程池，避免阻塞 FastAPI 事件循环
+        t_prepare = time.monotonic()
         image_data_url = await asyncio.to_thread(
             self.prepare_image_base64, image_path, rotation_degrees
         )
+        if telemetry is not None:
+            telemetry.image_prepare_ms = (time.monotonic() - t_prepare) * 1000.0
 
         user_content: list[dict[str, Any]] = [
             {
@@ -268,7 +293,14 @@ class VisionModelClient:
             },
         ]
 
-        raw = await self._chat(messages, max_tokens=settings.model_max_tokens_recognize)
+        t_model = time.monotonic()
+        raw = await self._chat(
+            messages,
+            max_tokens=settings.model_max_tokens_recognize,
+            telemetry=telemetry,
+        )
+        if telemetry is not None:
+            telemetry.model_total_ms = (time.monotonic() - t_model) * 1000.0
         return self._parse_json_response(raw)
 
     # ============================================================

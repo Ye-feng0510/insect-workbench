@@ -32,6 +32,12 @@ from app.version import APP_CAPABILITIES, APP_PRODUCT, APP_VERSION
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """启动时初始化数据库与目录,启动后台预加载 worker。"""
+    # 应用日志:uvicorn 只配置自身 logger,这里补根 handler,
+    # 让 REC_TELEMETRY 等运维 INFO 日志能进入 docker logs(级别由 LOG_LEVEL 控制)
+    logging.basicConfig(
+        level=settings.log_level.upper(),
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
     init_db()
     # 低峰期(启动时)执行 WAL checkpoint,防止 -wal 文件长期膨胀占盘
     _wal_checkpoint()
@@ -48,6 +54,10 @@ async def lifespan(app: FastAPI):
     yield
     await worker.stop()
     maintenance.cancel()
+    # 释放进程级共享 httpx 连接池
+    from app.services.model_http import close_http_client
+
+    await close_http_client()
 
 
 def _wal_checkpoint() -> None:

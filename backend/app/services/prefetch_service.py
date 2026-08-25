@@ -34,6 +34,7 @@ from app.models import (
     User,
 )
 from app.services import recognition_service
+from app.services.recognition_telemetry import Telemetry
 from app.services.resource_scheduler import get_scheduler
 
 logger = logging.getLogger(__name__)
@@ -142,6 +143,8 @@ class PrefetchWorker:
         self._last_batch_id: int = 0
         self._scheduler = get_scheduler()
         self._started_at: float = time.monotonic()
+        # v1.3.10 任务注册表:pf_id -> 在途 asyncio.Task,供前台接管时取消
+        self._tasks: dict[int, asyncio.Task] = {}
 
     async def start(self) -> None:
         global _global_worker
@@ -428,14 +431,43 @@ class PrefetchWorker:
         资源调度:预加载属于后台任务,通过 resource_scheduler 获取槽位。
         用户手动识别(前台)永远优先;内存压力时后台暂停领取,前台不受影响。
         原有 Semaphore 保留作为并发上限的兜底约束。
+        任务在注册表登记,前台 request_takeover 可按 pf_id 取消本任务。
         """
-        async with self._semaphore:
-            if self._stop_event.is_set():
-                return
-            async with self._scheduler.slot(priority="background"):
+        current = asyncio.current_task()
+        if current is not None:
+            self._tasks[pf_id] = current
+        try:
+            async with self._semaphore:
                 if self._stop_event.is_set():
                     return
-                await self._prefetch_one(item_id, pf_id, fingerprint)
+                async with self._scheduler.slot(priority="background"):
+                    if self._stop_event.is_set():
+                        return
+                    await self._prefetch_one(item_id, pf_id, fingerprint)
+        finally:
+            self._tasks.pop(pf_id, None)
+
+    # ============================================================
+    # 前台接管(v1.3.10)
+    # ============================================================
+
+    async def request_takeover(self, pf_id: int) -> str:
+        """前台接管:取消在途后台任务并清理预载行,避免重复模型调用。
+
+        返回:
+          "ready"     - 任务恰好已完成,结果可直接消费(零重复调用)
+          "cancelled" - 已取消/清理,调用方走冷路径
+        """
+        task = self._tasks.get(pf_id)
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass  # 任务已被本方法取消,预期行为
+            except Exception:
+                pass  # 任务自身的模型错误:接管后前台冷路径覆盖
+        return await _takeover_cleanup_row(pf_id)
 
     async def _prefetch_one(
         self,
@@ -444,6 +476,7 @@ class PrefetchWorker:
         fingerprint: str,
     ) -> bool:
         """对单张素材调用模型识别并保存结果。"""
+        telemetry = Telemetry(path="background", item_id=item_id)
         db = SessionLocal()
         try:
             # 原子领取：queued → running
@@ -475,6 +508,7 @@ class PrefetchWorker:
                 if not _commit_with_retry(db, f"drop-inactive-item-{pf_id}"):
                     return False
                 return False
+            telemetry.owner_id = batch.owner_id
 
             pf.status = PREFETCH_STATUS_RUNNING
             pf.attempt_count = (pf.attempt_count or 0) + 1
@@ -492,19 +526,27 @@ class PrefetchWorker:
         from app.services.materials_service import resolve_material_image_path
         source = resolve_material_image_path(stored_path)
         if not source.exists():
+            telemetry.error = "素材图片文件不存在"
             self._mark_failed(pf_id, "素材图片文件不存在")
             return False
 
         try:
             db2 = SessionLocal()
             try:
-                client = recognition_service._get_model_client(db2)
+                # v1.3.10 后台预载使用独立短超时,慢/卡请求不长期占用槽位
+                client = recognition_service._get_model_client(
+                    db2, timeout=settings.model_background_timeout_seconds
+                )
                 prompt = recognition_service._load_recognition_prompt(db2)
             finally:
                 db2.close()
 
             result = await recognition_service.recognize_image_with_ocr(
-                client, str(source), prompt, prefetch_rotation
+                client,
+                str(source),
+                prompt,
+                prefetch_rotation,
+                telemetry=telemetry,
             )
             from app.services.image_variant_service import get_preview_path
             try:
@@ -515,7 +557,11 @@ class PrefetchWorker:
                     item_id,
                     exc_info=True,
                 )
+        except asyncio.CancelledError:
+            telemetry.error = "前台接管取消"
+            raise
         except Exception as exc:
+            telemetry.error = f"{type(exc).__name__}: {getattr(exc, 'detail', exc)}"[:200]
             self._mark_failed(pf_id, str(getattr(exc, "detail", exc)))
             return False
 
@@ -548,9 +594,13 @@ class PrefetchWorker:
             pf.result_json = json.dumps(result, ensure_ascii=False)
             pf.error_message = ""
             pf.next_retry_at = None
-            return _commit_with_retry(db3, f"save-ready-{pf_id}")
+            t_commit = time.monotonic()
+            committed = _commit_with_retry(db3, f"save-ready-{pf_id}")
+            telemetry.db_commit_ms = (time.monotonic() - t_commit) * 1000.0
+            return committed
         finally:
             db3.close()
+            telemetry.emit()
 
     def _mark_failed(self, pf_id: int, error_message: str) -> None:
         """标记任务为失败，设置指数退避重试时间。
@@ -656,6 +706,33 @@ class PrefetchWorker:
 def get_worker() -> PrefetchWorker | None:
     """获取全局 worker 实例。"""
     return _global_worker
+
+
+async def _takeover_cleanup_row(pf_id: int) -> str:
+    """接管后的行清理:ready 保留供消费,其余删除(claim 守卫兜底防重)。"""
+    db = SessionLocal()
+    try:
+        pf = db.get(MaterialPrefetchResult, pf_id)
+        if pf is not None and pf.status == PREFETCH_STATUS_READY and pf.result_json:
+            return "ready"
+        if pf is not None:
+            db.delete(pf)
+            _commit_with_retry(db, f"takeover-delete-{pf_id}")
+        return "cancelled"
+    finally:
+        db.close()
+
+
+async def request_takeover(pf_id: int) -> str:
+    """前台接管预载任务:取消在途后台调用并清理预载行。
+
+    返回 "ready"(任务恰好完成,直接消费)或 "cancelled"(走冷路径)。
+    worker 未运行时仅做行清理,行为安全。
+    """
+    worker = _global_worker
+    if worker is not None:
+        return await worker.request_takeover(pf_id)
+    return await _takeover_cleanup_row(pf_id)
 
 
 def notify_worker() -> None:

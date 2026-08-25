@@ -247,7 +247,9 @@ export interface MaterialPreviewWindow {
 export interface MaterialPrefetchStatus {
   ready_count: number
   running_count: number
+  queued_count: number
   failed_count: number
+  pending_count: number
   target: number
 }
 

@@ -1,8 +1,10 @@
 """数据素材图片批次、队列、跳过和安全测试。"""
 import io
 import json
+import threading
 import time
 import zipfile
+from datetime import datetime, timedelta
 
 import httpx
 import pytest
@@ -1041,4 +1043,212 @@ def test_exhausted_quota_preserves_pending_item_and_image_access(
     assert client.get(
         f"{resumed.json()['image_url']}?variant=invalid"
     ).status_code == 422
+
+
+# ============================================================
+# v1.3.10 前台/后台协同:状态感知等待与接管
+# ============================================================
+
+def _fake_extract_factory(calls: dict[str, int]):
+    """构造计数版 extract_image_info:区分冷路径与缓存消费。"""
+
+    async def fake_extract(
+        db,
+        image_path,
+        image_filename,
+        rotation_degrees=0,
+        record=None,
+        precomputed_result=None,
+        owner_id=None,
+    ):
+        if precomputed_result is not None:
+            calls["cached"] += 1
+            result = precomputed_result
+        else:
+            calls["cold"] += 1
+            result = {"中名": "冷路径结果"}
+        record.status = STATUS_AWAITING_CONFIRMATION
+        record.extracted_draft_json = json.dumps(
+            {
+                "extracted": {
+                    "中名": result.get("中名", ""),
+                    "产地3": result.get("产地3", ""),
+                    "图像": result.get("图像", ""),
+                    "采集人": result.get("采集人", ""),
+                    "采集日期": result.get("采集日期", ""),
+                },
+                "confidence": {},
+                "evidence": {},
+                "warnings": [],
+            },
+            ensure_ascii=False,
+        )
+        db.commit()
+        db.refresh(record)
+        return record
+
+    return fake_extract
+
+
+def _insert_prefetch_row(TestSession, batch_id, item_id, status, **extra):
+    from app.models import MaterialPrefetchResult
+
+    db = TestSession()
+    row = MaterialPrefetchResult(
+        batch_id=batch_id,
+        item_id=item_id,
+        status=status,
+        rotation_degrees=0,
+        **extra,
+    )
+    db.add(row)
+    db.commit()
+    row_id = row.id
+    db.close()
+    return row_id
+
+
+def test_queued_prefetch_short_window_takeover(materials_client, monkeypatch):
+    """v1.3.10:queued 任务在短窗口内未就绪 → 前台接管,只花一次模型调用。"""
+    client, TestSession = materials_client
+    from app.models import MaterialPrefetchResult
+    from app.services import prefetch_service
+
+    monkeypatch.setattr(prefetch_service, "SessionLocal", TestSession)
+    monkeypatch.setattr(
+        materials_service.settings, "material_prefetch_foreground_wait_seconds", 0.5
+    )
+    calls = {"cold": 0, "cached": 0}
+    monkeypatch.setattr(
+        materials_service.recognition_service,
+        "extract_image_info",
+        _fake_extract_factory(calls),
+    )
+    assert upload_zip(client, {"a.jpg": image_bytes()}).status_code == 200
+
+    db = TestSession()
+    batch = db.query(MaterialBatch).one()
+    item = db.query(MaterialItem).order_by(MaterialItem.sequence).first()
+    db.close()
+    pf_id = _insert_prefetch_row(
+        TestSession, batch.id, item.id, "queued", config_fingerprint="fp"
+    )
+
+    started = time.monotonic()
+    response = client.post("/api/materials/next-extract")
+    elapsed = time.monotonic() - started
+
+    assert response.status_code == 200
+    assert elapsed < 10, "queued 接管不应长时间等待"
+    assert calls["cold"] == 1, "接管后前台应且只应冷路径调用一次"
+    assert calls["cached"] == 0
+    db = TestSession()
+    assert db.get(MaterialPrefetchResult, pf_id) is None, "接管后预载行应删除"
+    db.close()
+
+
+def test_running_prefetch_wait_for_completion(materials_client, monkeypatch):
+    """v1.3.10:running 任务健康时前台等它收尾,消费缓存,零模型调用。"""
+    client, TestSession = materials_client
+    from app.models import MaterialPrefetchResult
+    from app.services import prefetch_service
+
+    monkeypatch.setattr(prefetch_service, "SessionLocal", TestSession)
+    calls = {"cold": 0, "cached": 0}
+    monkeypatch.setattr(
+        materials_service.recognition_service,
+        "extract_image_info",
+        _fake_extract_factory(calls),
+    )
+    assert upload_zip(client, {"a.jpg": image_bytes()}).status_code == 200
+
+    db = TestSession()
+    batch = db.query(MaterialBatch).one()
+    item = db.query(MaterialItem).order_by(MaterialItem.sequence).first()
+    db.close()
+    pf_id = _insert_prefetch_row(
+        TestSession, batch.id, item.id, "running", config_fingerprint="fp"
+    )
+
+    def mark_ready():
+        session = TestSession()
+        row = session.get(MaterialPrefetchResult, pf_id)
+        row.status = "ready"
+        row.result_json = json.dumps({"中名": "预加载完成结果"}, ensure_ascii=False)
+        session.commit()
+        session.close()
+
+    timer = threading.Timer(1.2, mark_ready)
+    timer.start()
+    try:
+        response = client.post("/api/materials/next-extract")
+    finally:
+        timer.join()
+
+    assert response.status_code == 200
+    assert calls["cached"] == 1, "应等待在途任务完成并消费缓存"
+    assert calls["cold"] == 0, "等待期间不得重复发起模型调用"
+
+
+def test_stuck_running_prefetch_takeover(materials_client, monkeypatch):
+    """v1.3.10:running 超过卡死阈值 → 取消接管,只花一次模型调用。"""
+    client, TestSession = materials_client
+    from app.models import MaterialPrefetchResult
+    from app.services import prefetch_service
+
+    monkeypatch.setattr(prefetch_service, "SessionLocal", TestSession)
+    monkeypatch.setattr(
+        materials_service.settings, "material_prefetch_stuck_threshold_seconds", 1.0
+    )
+    calls = {"cold": 0, "cached": 0}
+    monkeypatch.setattr(
+        materials_service.recognition_service,
+        "extract_image_info",
+        _fake_extract_factory(calls),
+    )
+    assert upload_zip(client, {"a.jpg": image_bytes()}).status_code == 200
+
+    db = TestSession()
+    batch = db.query(MaterialBatch).one()
+    item = db.query(MaterialItem).order_by(MaterialItem.sequence).first()
+    db.close()
+    pf_id = _insert_prefetch_row(
+        TestSession,
+        batch.id,
+        item.id,
+        "running",
+        config_fingerprint="fp",
+        updated_at=datetime.utcnow() - timedelta(seconds=120),
+    )
+
+    started = time.monotonic()
+    response = client.post("/api/materials/next-extract")
+    elapsed = time.monotonic() - started
+
+    assert response.status_code == 200
+    assert elapsed < 10, "卡死接管应快速发生"
+    assert calls["cold"] == 1
+    assert calls["cached"] == 0
+    db = TestSession()
+    assert db.get(MaterialPrefetchResult, pf_id) is None
+    db.close()
+
+
+def test_prefetch_status_reports_queued_and_pending(materials_client):
+    """v1.3.10:prefetch/status 返回 queued/pending 计数。"""
+    client, TestSession = materials_client
+    assert upload_zip(
+        client, {"a.jpg": image_bytes(), "b.jpg": image_bytes()}
+    ).status_code == 200
+
+    db = TestSession()
+    batch = db.query(MaterialBatch).one()
+    item = db.query(MaterialItem).order_by(MaterialItem.sequence).first()
+    db.close()
+    _insert_prefetch_row(TestSession, batch.id, item.id, "queued")
+
+    data = client.get("/api/materials/prefetch/status").json()
+    assert data["queued_count"] == 1
+    assert data["pending_count"] == 2
+    assert data["ready_count"] == 0
 
