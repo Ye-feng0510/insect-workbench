@@ -15,6 +15,8 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.config import settings
 from app.database import SessionLocal
 from app.models import (
+    INGEST_STAGE_EXTRACTING,
+    INGEST_STAGE_STANDARDIZING,
     INGEST_STATUS_COMPLETED,
     INGEST_STATUS_FAILED,
     INGEST_STATUS_PROCESSING,
@@ -45,6 +47,7 @@ def serialize_job(job: MaterialIngestJob) -> dict[str, Any]:
     return {
         "job_id": job.id,
         "status": job.status,
+        "stage": job.stage,
         "processed_count": job.processed_count,
         "total_planned": job.total_planned,
         "total_count": job.total_count,
@@ -110,13 +113,43 @@ def _process_job(
             owner_id,
             progress_cb=progress,
         )
+        # v1.3.11 标准化阶段:解压完成后统一预压缩,完成前门槛拦截识别。
+        # 失败不回滚批次(降级为现状临时压缩路径),任务仍可 completed。
+        standardize_note = ""
+        batch = materials_service.get_active_batch(db, owner_id)
+        if batch is not None:
+            from app.services import material_standardize_service
+
+            if settings.material_standardize_enabled:
+                _set_job_stage(job_id, INGEST_STAGE_STANDARDIZING, session_factory)
+                db.expire(batch)
+                try:
+                    stats = material_standardize_service.standardize_batch(
+                        batch.id, session_factory, progress_cb=progress
+                    )
+                    standardize_note = material_standardize_service.summarize_stats(stats)
+                except Exception:
+                    logger.warning(
+                        "素材标准化失败,降级为临时压缩路径 batch_id=%s",
+                        batch.id,
+                        exc_info=True,
+                    )
+                    material_standardize_service.mark_batch_preprocess_failed(
+                        batch.id, session_factory
+                    )
+                    standardize_note = "标准化失败已降级:识别将使用临时压缩路径"
+            else:
+                # 开关关闭:直接置 completed,退回 v1.3.10 行为
+                material_standardize_service.mark_batch_preprocess_completed(
+                    batch.id, session_factory
+                )
         _prewarm_previews(result, owner_id, session_factory)
         job = db.get(MaterialIngestJob, job_id)
         if job is not None:
             job.status = INGEST_STATUS_COMPLETED
             job.total_count = int(result.get("total_count", 0))
             job.processed_count = max(job.processed_count, job.total_count)
-            job.error_message = ""
+            job.error_message = standardize_note
             db.commit()
         from app.services.prefetch_service import notify_worker
 
@@ -130,6 +163,25 @@ def _process_job(
             db.commit()
         logger.warning("素材摄取失败 job_id=%s", job_id, exc_info=True)
         source_path.unlink(missing_ok=True)
+    finally:
+        db.close()
+
+
+def _set_job_stage(
+    job_id: int,
+    stage: str,
+    session_factory: sessionmaker,
+) -> None:
+    """更新摄取任务阶段标记(extracting/standardizing),失败仅记录日志。"""
+    db = session_factory()
+    try:
+        job = db.get(MaterialIngestJob, job_id)
+        if job is not None and job.status == INGEST_STATUS_PROCESSING:
+            job.stage = stage
+            db.commit()
+    except Exception:
+        db.rollback()
+        logger.warning("更新摄取阶段失败 job_id=%s", job_id, exc_info=True)
     finally:
         db.close()
 
@@ -176,8 +228,13 @@ def start_job(
     *,
     bind: Any = None,
 ) -> None:
-    """创建独立后台线程,不依赖请求生命周期或 TestClient event loop。"""
-    session_factory = SessionLocal if bind is None else sessionmaker(bind=bind)
+    """创建独立后台线程,不依赖请求生命周期或 TestClient event loop。
+
+    bind 为空时使用模块级 _session_factory(测试可注入隔离工厂,
+    避免后台线程直连生产 SessionLocal 污染真实数据库)。
+    """
+    factory = _session_factory()
+    session_factory = factory if bind is None else sessionmaker(bind=bind)
     thread = threading.Thread(
         target=_run_job_thread,
         args=(job_id, source_path, filename, owner_id, session_factory),
@@ -187,6 +244,17 @@ def start_job(
     with _threads_lock:
         _threads.add(thread)
     thread.start()
+
+
+_factory_override: sessionmaker | None = None
+
+
+def _session_factory() -> sessionmaker:
+    """会话工厂解析点:默认生产 SessionLocal,测试可整体替换。
+
+    注入方式:monkeypatch.setattr(material_ingest_service, "_factory_override", factory)
+    """
+    return _factory_override if _factory_override is not None else SessionLocal
 
 
 def _run_job_thread(
@@ -208,6 +276,7 @@ def recover_interrupted_jobs() -> None:
     """启动时将所有未完成任务标记为失败并清理临时 ZIP。
 
     进程重启后内存中的后台线程已不存在,保留 processing 会永久阻塞下一次上传。
+    同时将标准化未完成的活跃批次降级为 failed,避免门槛锁死工作台。
     """
     db = SessionLocal()
     try:
@@ -224,5 +293,32 @@ def recover_interrupted_jobs() -> None:
             Path(job.source_path).unlink(missing_ok=True)
         if jobs:
             db.commit()
+        # v1.3.11:重启恢复——预处理未完成的活跃批次降级可用(走临时压缩路径)
+        from app.models import (
+            MaterialBatch,
+            PREPROCESS_STATUS_FAILED,
+            PREPROCESS_STATUS_PENDING,
+            PREPROCESS_STATUS_PROCESSING,
+        )
+
+        stale = (
+            db.query(MaterialBatch)
+            .filter(
+                MaterialBatch.is_active.is_(True),
+                MaterialBatch.preprocess_status.in_(
+                    [PREPROCESS_STATUS_PENDING, PREPROCESS_STATUS_PROCESSING]
+                ),
+            )
+            .all()
+        )
+        for batch in stale:
+            batch.preprocess_status = PREPROCESS_STATUS_FAILED
+        if stale:
+            db.commit()
+            for batch in stale:
+                logger.warning(
+                    "重启降级:批次 %s 标准化未完成,识别将使用临时压缩路径",
+                    batch.id,
+                )
     finally:
         db.close()

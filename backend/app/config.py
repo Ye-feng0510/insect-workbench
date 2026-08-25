@@ -131,6 +131,19 @@ class Settings(BaseSettings):
     # 恢复需回升至 暂停阈值+该余量(0=与暂停阈值相同,退回旧行为)
     resource_memory_resume_headroom_mb: float = 256.0
 
+    # v1.3.11 上传时统一预压缩标准化(门槛式)
+    # 总开关:False 时完全退回 v1.3.10 行为(解压后原样落盘,识别时临时压缩)
+    material_standardize_enabled: bool = True
+    # 标准化目标长边(<=0 不缩放,仅转码)。主流多模态 API 有效区间 950~2048:
+    # GPT 先缩入 2048 方框、DeepSeek 推理前缩至约 800×800,超出部分零收益
+    material_standardize_long_edge: int = 1600
+    # 标准化 JPEG 质量(与 image_jpeg_quality 解耦,仅影响落盘标准图)
+    material_standardize_jpeg_quality: int = 85
+    # 最小节省比例:新文件体积 < 旧体积×该值才替换(已达标小图零扰动)
+    material_standardize_min_saving_ratio: float = 0.85
+    # 内存退避等待秒数(阈值复用 resource_memory_pressure_mb;<=0 禁用退避)
+    material_standardize_memory_backoff_seconds: float = 2.0
+
     # v1.3.10 前台/后台协同
     # 前台对 queued 预载任务的等待窗口,超时后前台接管(取消后台,零重复调用)
     material_prefetch_foreground_wait_seconds: float = 8.0

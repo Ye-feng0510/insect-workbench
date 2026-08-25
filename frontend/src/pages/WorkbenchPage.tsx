@@ -50,6 +50,20 @@ interface DraftData {
   materialBatchId?: number
 }
 
+/** v1.3.11:识别后端 409 且 detail 为标准化进度结构体时返回进度,否则 null */
+function preprocessProgressFromError(e: unknown): { preprocessed_count: number; total_count: number } | null {
+  const detail = (e as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
+  if (detail && typeof detail === 'object' && 'preprocess_status' in detail) {
+    const d = detail as { preprocessed_count?: number; total_count?: number }
+    return { preprocessed_count: d.preprocessed_count ?? 0, total_count: d.total_count ?? 0 }
+  }
+  return null
+}
+
+function isPreprocessingError(e: unknown): boolean {
+  return preprocessProgressFromError(e) !== null
+}
+
 export default function WorkbenchPage() {
   const { show } = useToast()
   const [loading, setLoading] = useState(true)
@@ -306,6 +320,38 @@ export default function WorkbenchPage() {
     }
   }
 
+  /** v1.3.11 门槛等待:轮询 summary 直至标准化完成,自动重发下一张识别 */
+  const waitPreprocessingAndRetry = async (nextRotation = 0) => {
+    const progress = { done: 0, total: 0 }
+    show('图片标准化中,完成后自动开始', 'info')
+    try {
+      for (let attempt = 0; mountedRef.current && attempt < 3600; attempt++) {
+        await new Promise((resolve) => window.setTimeout(resolve, 2000))
+        if (!mountedRef.current) return
+        const summary = await getMaterialSummary().catch(() => null)
+        if (!summary) continue
+        setMaterialSummary(summary)
+        progress.done = summary.preprocessed_count
+        progress.total = summary.total_count
+        if (summary.preprocess_status === 'completed' || summary.preprocess_status === 'failed') {
+          show('图片标准化完成,开始识别', 'success')
+          extractionLockRef.current = false
+          setQueueLoading(false)
+          setExtracting(false)
+          await startNextMaterial(nextRotation)
+          return
+        }
+      }
+      show('等待标准化超时,请稍后重试', 'error')
+    } finally {
+      if (mountedRef.current) {
+        extractionLockRef.current = false
+        setQueueLoading(false)
+        setExtracting(false)
+      }
+    }
+  }
+
   const startNextMaterial = async (nextRotation = 0) => {
     if (extractionLockRef.current) return
     extractionLockRef.current = true
@@ -343,6 +389,10 @@ export default function WorkbenchPage() {
       if (status === 429) {
         setMaterialSummary(await getMaterialSummary().catch(() => materialSummary))
         show('工作流配额已用尽,当前素材和图片已保留', 'error')
+      } else if (status === 409 && isPreprocessingError(e)) {
+        // v1.3.11 门槛:标准化未完成 → 显示进度,完成后自动发起识别
+        await waitPreprocessingAndRetry(nextRotation)
+        return
       } else if (status === 404) {
         clearWorkbench()
         setMaterialSummary(await getMaterialSummary().catch(() => materialSummary))

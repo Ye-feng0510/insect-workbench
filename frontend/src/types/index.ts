@@ -215,6 +215,9 @@ export interface MaterialSummary {
   completed_count: number
   skipped_count: number
   failed_count: number
+  /** v1.3.11 批次图片标准化状态:pending/processing 时识别被门槛拦截 */
+  preprocess_status: 'pending' | 'processing' | 'completed' | 'failed'
+  preprocessed_count: number
   quota_total: number | null
   quota_charged: number
   quota_reserved: number
@@ -225,6 +228,8 @@ export interface MaterialSummary {
 export interface MaterialIngestJob {
   job_id: number
   status: 'processing' | 'completed' | 'failed'
+  /** 两阶段进度:extracting(解压) → standardizing(压缩标准化) */
+  stage: 'extracting' | 'standardizing'
   processed_count: number
   total_planned: number
   total_count: number

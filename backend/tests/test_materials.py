@@ -83,6 +83,11 @@ def materials_client(tmp_path, monkeypatch):
     monkeypatch.setattr(materials_service, "IMAGES_DIR", recognition_dir)
     monkeypatch.setattr(materials_router, "MATERIAL_ZIPS_DIR", zip_dir)
     monkeypatch.setattr(materials_service.settings, "material_preview_prewarm_count", 0)
+    # v1.3.11 测试隔离:ingest 后台线程改用测试库会话工厂,
+    # 防止直连生产 SessionLocal 把测试批次写进真实数据库
+    from app.services import material_ingest_service as ingest_service
+
+    monkeypatch.setattr(ingest_service, "_factory_override", TestSession)
 
     def override_get_db():
         db = TestSession()

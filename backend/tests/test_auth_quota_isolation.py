@@ -596,7 +596,7 @@ def test_partial_auth_tables_resume_legacy_migration(tmp_path, monkeypatch):
             text("SELECT COUNT(*) FROM users WHERE username='bootstrap'")
         ).scalar_one()
     assert owner_id == admin_id
-    assert versions == list(range(1, 10))
+    assert versions == list(range(1, 11))
     assert admin_count == 1
     assert len(list(tmp_path.glob("legacy.db.backup-*"))) == 1
 
@@ -639,7 +639,7 @@ def test_legacy_migration_assigns_bootstrap_admin(tmp_path, monkeypatch):
             text("SELECT jiandingren FROM specimen_records WHERE id=1")
         ).scalar_one()
     assert owner == admin_id
-    assert versions == list(range(1, 10))
+    assert versions == list(range(1, 11))
     assert {"jiandingren", "ocr_result_json"}.issubset(columns)
     assert jiandingren == ""
     assert "uq_specimen_owner_tuxiang_completed" in indexes
@@ -799,7 +799,7 @@ def test_authentic_v4_to_v6_migration_preserves_records_and_settings(tmp_path):
                 text("PRAGMA index_list('workflow_sessions')")
             )
         }
-    assert versions == list(range(1, 10))
+    assert versions == list(range(1, 11))
     assert tuple(record) == (1, "旧记录", "LEGACY-V4", "")
     assert tuple(preserved_settings) == (
         "https://model.example/v1",

@@ -26,6 +26,7 @@ from app.models import (
     MaterialBatch,
     MaterialItem,
     MaterialPrefetchResult,
+    PREPROCESS_STATUS_COMPLETED,
     PREFETCH_STATUS_FAILED,
     PREFETCH_STATUS_QUEUED,
     PREFETCH_STATUS_READY,
@@ -247,6 +248,9 @@ class PrefetchWorker:
                 .filter(MaterialBatch.is_active.is_(True))
                 .filter(MaterialBatch.owner_id.in_(active_owner_ids))
                 .filter(User.is_active.is_(True))
+                # v1.3.11 门槛:标准化未完成的批次不预取,避免对将被替换的原图
+                # 发起模型调用(与前台 ensure_batch_ready 语义一致)
+                .filter(MaterialBatch.preprocess_status == PREPROCESS_STATUS_COMPLETED)
                 .filter(
                     (User.role == ROLE_ADMIN)
                     | (User.workflow_quota.is_(None))

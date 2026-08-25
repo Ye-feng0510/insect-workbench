@@ -66,6 +66,8 @@ const availableSummary: MaterialSummary = {
   completed_count: 130,
   skipped_count: 0,
   failed_count: 0,
+  preprocess_status: 'completed',
+  preprocessed_count: 150,
   quota_total: 150,
   quota_charged: 130,
   quota_reserved: 0,

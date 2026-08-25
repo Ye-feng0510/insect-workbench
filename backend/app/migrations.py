@@ -16,7 +16,7 @@ from app.config import EXPORTS_DIR, settings
 from app.database import Base
 from app.models import ExcelTemplate, ExportArtifact, ROLE_ADMIN, User
 
-LATEST_SCHEMA_VERSION = 9
+LATEST_SCHEMA_VERSION = 10
 
 
 def _validate_new_admin_credentials(username: str, password: str) -> None:
@@ -457,6 +457,62 @@ def migrate(engine: Engine) -> None:
                 )
             )
             conn.execute(text("INSERT INTO schema_version(version) VALUES (9)"))
+
+        if 10 not in applied:
+            # v1.3.11 标准化门槛:批次标准化状态/计数 + 摄取任务阶段标记
+            if (
+                "material_batches" in existing_tables
+                and "preprocess_status" not in _columns(conn, "material_batches")
+            ):
+                conn.execute(
+                    text(
+                        "ALTER TABLE material_batches ADD COLUMN preprocess_status "
+                        "VARCHAR(20) NOT NULL DEFAULT 'pending'"
+                    )
+                )
+            if (
+                "material_batches" in existing_tables
+                and "preprocessed_count" not in _columns(conn, "material_batches")
+            ):
+                conn.execute(
+                    text(
+                        "ALTER TABLE material_batches ADD COLUMN preprocessed_count "
+                        "INTEGER NOT NULL DEFAULT 0"
+                    )
+                )
+            if (
+                "material_ingest_jobs" in existing_tables
+                and "stage" not in _columns(conn, "material_ingest_jobs")
+            ):
+                conn.execute(
+                    text(
+                        "ALTER TABLE material_ingest_jobs ADD COLUMN stage "
+                        "VARCHAR(20) NOT NULL DEFAULT 'extracting'"
+                    )
+                )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_material_batches_preprocess_status "
+                    "ON material_batches(preprocess_status)"
+                )
+            )
+            # 存量批次回填 completed:不追溯标准化,避免升级后误锁工作台。
+            # total_count 可能缺失(极旧结构),用 COUNT(items) 兜底,再退化为行数语义。
+            if "material_batches" in existing_tables:
+                conn.execute(
+                    text(
+                        "UPDATE material_batches SET preprocess_status = 'completed' "
+                        "WHERE preprocess_status IN ('pending', 'processing')"
+                    )
+                )
+                if "total_count" in _columns(conn, "material_batches"):
+                    conn.execute(
+                        text(
+                            "UPDATE material_batches SET preprocessed_count = total_count "
+                            "WHERE preprocess_status = 'completed'"
+                        )
+                    )
+            conn.execute(text("INSERT INTO schema_version(version) VALUES (10)"))
 
     # Creates only missing tables; ownership changes above never rely on create_all.
     Base.metadata.create_all(bind=engine)

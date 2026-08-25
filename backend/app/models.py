@@ -370,6 +370,20 @@ class TaxonConceptCache(Base):
 # 5. material_batches —— 数据素材批次
 # ============================================================
 
+# 素材批次图片标准化状态(v1.3.11 门槛式预压缩)
+# pending/processing:标准化未完成,前台 next-extract 与后台预取均被门槛拦截
+# completed:标准图就绪,全链路(模型/预览/预取)消费压缩产物
+# failed:标准化失败,降级可用(识别时走临时压缩路径,不阻塞用户)
+PREPROCESS_STATUS_PENDING = "pending"
+PREPROCESS_STATUS_PROCESSING = "processing"
+PREPROCESS_STATUS_COMPLETED = "completed"
+PREPROCESS_STATUS_FAILED = "failed"
+
+# 摄取任务阶段(两阶段进度:解压 → 标准化)
+INGEST_STAGE_EXTRACTING = "extracting"
+INGEST_STAGE_STANDARDIZING = "standardizing"
+
+
 class MaterialBatch(Base):
     """用户上传的数据素材 ZIP 批次。一次只有一个活跃批次。"""
 
@@ -384,6 +398,11 @@ class MaterialBatch(Base):
     extract_dir: Mapped[str] = mapped_column(String(1000))
     total_count: Mapped[int] = mapped_column(Integer, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    # v1.3.11 标准化进度(门槛式):存量批次由迁移回填 completed
+    preprocess_status: Mapped[str] = mapped_column(
+        String(20), default=PREPROCESS_STATUS_PENDING, index=True
+    )
+    preprocessed_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.current_timestamp()
     )
@@ -512,6 +531,10 @@ class MaterialIngestJob(Base):
     source_path: Mapped[str] = mapped_column(String(1000))
     status: Mapped[str] = mapped_column(
         String(30), default=INGEST_STATUS_PROCESSING, index=True
+    )
+    # 两阶段进度标记:extracting(解压入库) → standardizing(压缩标准化)
+    stage: Mapped[str] = mapped_column(
+        String(20), default=INGEST_STAGE_EXTRACTING
     )
     processed_count: Mapped[int] = mapped_column(Integer, default=0)
     total_planned: Mapped[int] = mapped_column(Integer, default=0)

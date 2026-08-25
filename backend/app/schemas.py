@@ -376,6 +376,9 @@ class MaterialSummary(BaseModel):
     completed_count: int = 0
     skipped_count: int = 0
     failed_count: int = 0
+    # v1.3.11 标准化进度(门槛提示/轮询恢复)
+    preprocess_status: str = "completed"
+    preprocessed_count: int = 0
     quota_total: int | None = None
     quota_charged: int = 0
     quota_reserved: int = 0
@@ -388,6 +391,8 @@ class MaterialIngestJobResponse(BaseModel):
 
     job_id: int
     status: str
+    # 两阶段进度:extracting(解压) → standardizing(压缩标准化)
+    stage: str = "extracting"
     processed_count: int = 0
     total_planned: int = 0
     total_count: int = 0

@@ -237,13 +237,17 @@ export default function MaterialsPage() {
                 <>
                   <Loader2 className="mb-3 h-10 w-10 animate-spin text-emerald-600" />
                   <p className="text-sm font-medium text-emerald-700">
-                    {ingestProgress?.status === 'processing'
-                      ? '文件已收取,正在后台解析素材...'
-                      : '正在上传素材...'}
+                    {ingestProgress?.status === 'processing' && ingestProgress.stage === 'standardizing'
+                      ? '正在压缩原图,为识别提速...'
+                      : ingestProgress?.status === 'processing'
+                        ? '文件已收取,正在后台解析素材...'
+                        : '正在上传素材...'}
                   </p>
                   <p className="mt-1 text-xs text-gray-400">
                     {ingestProgress && ingestProgress.total_planned > 0
-                      ? `已解析 ${ingestProgress.processed_count}/${ingestProgress.total_planned} 张`
+                      ? ingestProgress.stage === 'standardizing'
+                        ? `已标准化 ${ingestProgress.processed_count}/${ingestProgress.total_planned} 张`
+                        : `已解析 ${ingestProgress.processed_count}/${ingestProgress.total_planned} 张`
                       : '图片较多时请耐心等待'}
                   </p>
                 </>

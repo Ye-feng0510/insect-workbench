@@ -154,7 +154,37 @@ def get_summary(db: Session, owner_id: int) -> dict[str, Any]:
     summary["completed_count"] = counts.get(MATERIAL_STATUS_COMPLETED, 0)
     summary["skipped_count"] = counts.get(MATERIAL_STATUS_SKIPPED, 0)
     summary["failed_count"] = counts.get(MATERIAL_STATUS_FAILED, 0)
+    # v1.3.11 标准化进度透出(前端门槛提示/轮询恢复用)
+    summary["preprocess_status"] = batch.preprocess_status
+    summary["preprocessed_count"] = batch.preprocessed_count
     return summary
+
+
+def ensure_batch_ready(batch: MaterialBatch) -> None:
+    """门槛谓词:批次图片标准化未完成时拒绝开始识别。
+
+    pending/processing → 409(带结构化进度);failed/completed 放行(降级可用)。
+    由前台 next-extract 与后台预取共同消费,保证门槛语义唯一。
+    """
+    from app.models import (
+        PREPROCESS_STATUS_COMPLETED,
+        PREPROCESS_STATUS_FAILED,
+    )
+
+    if batch.preprocess_status in (
+        PREPROCESS_STATUS_COMPLETED,
+        PREPROCESS_STATUS_FAILED,
+    ):
+        return
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "message": "图片标准化中,完成后即可开始识别",
+            "preprocess_status": batch.preprocess_status,
+            "preprocessed_count": int(batch.preprocessed_count or 0),
+            "total_count": int(batch.total_count or 0),
+        },
+    )
 
 
 def _normalized_archive_path(filename: str) -> str | None:
@@ -598,6 +628,8 @@ async def start_next_item(
     batch = get_active_batch(db, owner_id)
     if batch is None:
         raise HTTPException(status_code=404, detail="尚未上传数据素材压缩包")
+    # v1.3.11 门槛:标准化未完成前不消耗配额/槽位,直接拒绝
+    ensure_batch_ready(batch)
     item = (
         db.query(MaterialItem)
         .filter(
