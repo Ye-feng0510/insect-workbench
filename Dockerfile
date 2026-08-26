@@ -26,7 +26,9 @@ FROM python:3.12-slim AS runtime
 #   /app/data/           数据目录(SQLite/图片/模板/导出)
 WORKDIR /app/backend
 
-RUN apt-get -o Acquire::Retries=3 update \
+# 国内镜像源加速(deb.debian.org 在国内不稳定)
+RUN sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/debian.sources \
+    && apt-get -o Acquire::Retries=3 update \
     && apt-get -o Acquire::Retries=3 install -y --no-install-recommends libgl1 libglib2.0-0 libxcb1 \
     && rm -rf /var/lib/apt/lists/*
 

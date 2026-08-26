@@ -52,12 +52,19 @@ class ResourceScheduler:
         self.slots = slots if slots and slots > 0 else settings.resource_recognition_slots
         # v1.3.10 后台槽位上限:后台预载不能占满全部识别槽位,
         # 保证前台(用户手动识别)永远有空位可用。
-        # 配置 >= 总槽位时视为不限制,退回旧行为(兼容扩展)。
-        self.background_max = (
-            min(settings.resource_background_max_slots, self.slots)
-            if settings.resource_background_max_slots > 0
-            else self.slots
-        )
+        # v1.3.13 缺陷修复:原实现 resource_background_max_slots 默认 1,
+        # 使 MATERIAL_PREFETCH_CONCURRENCY 完全被架空(信号量放行但调度器
+        # 只给 1 个后台槽位),预取产能被锁死在 1 路。
+        # 新语义:>0 显式上限(兼容旧行为);0=自动——跟随预取并发,
+        # 但至少保留一个槽位给前台(min(并发, 总槽位-1))。
+        configured = settings.resource_background_max_slots
+        if configured > 0:
+            self.background_max = min(configured, self.slots)
+        else:
+            self.background_max = min(
+                max(1, settings.material_prefetch_concurrency),
+                max(1, self.slots - 1),
+            )
         self._foreground_active = 0
         self._background_active = 0
         self._waiters: list[_Waiter] = []

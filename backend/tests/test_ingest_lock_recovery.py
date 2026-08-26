@@ -6,6 +6,8 @@
 - 摄取线程异常退出 → 兜底守卫强写终态,不残留 processing
 - 看门狗:陈旧 processing 任务自动回收放行上传;新鲜任务仍拦截;
   开关关闭时不回收
+- v1.3.13 回归:标准化循环不得在图片压缩期间持有 SQLite 写锁;
+  进度写遇持续持锁应在 ~2.5s 内快速放弃(而非 4×引擎超时的等待风暴)
 
 复用 test_materials.materials_client 夹具(含 SessionLocal 隔离)。
 """
@@ -229,3 +231,100 @@ def test_watchdog_disabled_keeps_blocking(materials_client, monkeypatch):
 
     monkeypatch.setattr(ingest_service.settings, "material_ingest_stale_job_seconds", 0)
     assert ingest_service.has_active_job(TestSession(), 1) is True
+
+
+# ============================================================
+# 5. v1.3.13 回归:锁持有窗口与快速放弃
+# ============================================================
+
+def test_standardize_loop_does_not_hold_write_lock_during_transform(
+    materials_client, monkeypatch
+):
+    """标准化循环不得在图片压缩期间持有 SQLite 写锁。
+
+    旧实现每张图都给 fresh_batch.preprocessed_count 赋未提交脏写,
+    下一次查询 autoflush 即抢到写锁并跨秒级压缩持有,进度回调(另一连接)
+    被拖进最长 60s 的等待风暴。探针:每次变换时用第二连接短超时写入,
+    全部应立即成功。
+    """
+    import sqlite3
+    import time as _t
+
+    from app.services import material_standardize_service as std
+
+    client, TestSession = materials_client
+    files = {f"img{i}.jpg": _big_image_bytes(2000, 1500) for i in range(2)}
+    response = client.post(
+        "/api/materials/upload",
+        files={"file": ("probe.zip", _zip(files), "application/zip")},
+    )
+    assert response.status_code == 202, response.text
+    job_id = response.json()["job_id"]
+    for _ in range(600):
+        payload = client.get(f"/api/materials/ingest/{job_id}").json()
+        if payload["status"] in ("completed", "failed"):
+            break
+        _t.sleep(0.05)
+    assert payload["status"] == "completed", payload
+
+    db = TestSession()
+    batch = db.query(MaterialBatch).one()
+    batch.preprocess_status = "pending"
+    db.commit()
+    batch_id = batch.id
+    db.close()
+
+    db_file = TestSession.kw["bind"].url.database
+    real_transform = std._transform_image
+    probes: list[str] = []
+
+    def probing_transform(source, target):
+        probe = sqlite3.connect(db_file, timeout=0.5)
+        try:
+            probe.execute(
+                "UPDATE material_batches SET total_count=total_count WHERE id=?",
+                (batch_id,),
+            )
+            probe.commit()
+            probes.append("ok")
+        except sqlite3.OperationalError as exc:
+            probes.append(f"locked: {exc}")
+        finally:
+            probe.close()
+        return real_transform(source, target)
+
+    monkeypatch.setattr(std, "_transform_image", probing_transform)
+    stats = std.standardize_batch(batch_id, TestSession)
+
+    assert stats["processed"] == 2
+    assert probes == ["ok", "ok"], f"压缩期间写锁被标准化会话持有: {probes}"
+
+
+def test_update_progress_gives_up_quickly_under_held_lock(materials_client):
+    """进度写遇持续持锁应在 ~2.5s 内放弃,而非每尝试等满引擎级超时。"""
+    import sqlite3
+    import time as _t
+
+    client, TestSession = materials_client
+    job_id = _make_job(TestSession)
+    db_file = TestSession.kw["bind"].url.database
+
+    holder = sqlite3.connect(db_file, timeout=5)
+    holder.execute("BEGIN IMMEDIATE")
+    holder.execute(
+        "UPDATE material_ingest_jobs SET processed_count=-1 WHERE id=?", (job_id,)
+    )
+
+    start = _t.monotonic()
+    ingest_service._update_progress(job_id, 50, 100, TestSession)
+    elapsed = _t.monotonic() - start
+
+    holder.rollback()
+    holder.close()
+
+    assert elapsed < 8.0, f"进度写在持续锁下耗时 {elapsed:.1f}s,应快速放弃"
+    db = TestSession()
+    job = db.get(MaterialIngestJob, job_id)
+    db.close()
+    assert job.status == INGEST_STATUS_PROCESSING
+    assert job.processed_count == 0  # 探针持锁期间的 -1 不应可见

@@ -151,8 +151,11 @@ class Settings(BaseSettings):
     material_prefetch_foreground_wait_seconds: float = 8.0
     # running 预载任务超过该时长视为卡死,前台取消接管
     material_prefetch_stuck_threshold_seconds: float = 60.0
-    # 后台预载最多同时占用的识别槽位数(>=槽位数时不限制,退回旧行为)
-    resource_background_max_slots: int = 1
+    # 后台预载最多同时占用的识别槽位数(>0 显式上限;0=自动:跟随
+    # material_prefetch_concurrency,并至少保留 1 个槽位给前台)。
+    # v1.3.13:默认从 1 改为 0(自动)。原默认 1 会架空预取并发配置,
+    # 导致预取产能被锁死、前台每张都冷调用。
+    resource_background_max_slots: int = 0
     # 后台预载模型调用的独立超时(前台仍用 model_timeout_seconds)
     model_background_timeout_seconds: int = 45
 

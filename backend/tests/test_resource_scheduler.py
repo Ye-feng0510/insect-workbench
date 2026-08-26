@@ -196,3 +196,68 @@ def test_slot_context_manager_releases_on_exception():
             assert scheduler.stats().foreground_active == 1
 
     asyncio.run(scenario())
+
+
+def test_auto_background_max_follows_prefetch_concurrency(monkeypatch):
+    """v1.3.13 自动模式(=0):后台并发跟随预取并发,但保留前台余量。
+
+    旧默认 1 会架空 MATERIAL_PREFETCH_CONCURRENCY:信号量放行 4 路,
+    调度器却只给 1 个后台槽位,预取产能被锁死。
+    """
+    monkeypatch.setattr(rs.settings, "resource_background_max_slots", 0)
+    monkeypatch.setattr(rs.settings, "material_prefetch_concurrency", 4)
+
+    # 3 槽位:自动 = min(4, 3-1) = 2,前台永远有 1 个空位
+    scheduler = rs.ResourceScheduler(slots=3)
+    assert scheduler.background_max == 2
+
+    # 并发 2、3 槽位:自动 = min(2, 2) = 2
+    monkeypatch.setattr(rs.settings, "material_prefetch_concurrency", 2)
+    scheduler2 = rs.ResourceScheduler(slots=3)
+    assert scheduler2.background_max == 2
+
+    # 单槽位极端情况:max(1, slots-1)=1,允许 1 路后台
+    # (前台仍有等待队列优先唤醒,不会被饿死)
+    scheduler3 = rs.ResourceScheduler(slots=1)
+    assert scheduler3.background_max == 1
+
+
+def test_explicit_background_max_still_honored(monkeypatch):
+    """显式设置(>0)仍按旧语义生效,兼容已有部署。"""
+    monkeypatch.setattr(rs.settings, "resource_background_max_slots", 1)
+    scheduler = rs.ResourceScheduler(slots=3)
+    assert scheduler.background_max == 1
+
+
+def test_prefetch_lane_budget_scales_with_concurrency():
+    """v1.3.13 产能坡道按并发等比缩放,替代硬编码 3/2/1。
+
+    旧硬编码按默认并发 2 设计:并发调到 8 后同路仍最多起 3 个任务,
+    预取产能被锁死,跟不上 3 秒/张的用户节奏。
+    v1.3.13 二次调整:半水以下全速(稳态缺缓冲即全速),
+    实测旧档位让供应商侧并发被钉在 round(8*0.625)=5。
+    """
+    from app.services import prefetch_service as ps
+
+    def budget(concurrency, ready, target=30):
+        configured = max(1, concurrency)
+        if ready < target // 2:
+            return configured
+        if ready < (target * 3) // 4:
+            return max(1, round(configured * 0.625))
+        return max(1, round(configured * 0.375))
+
+    # 并发 8:半水以下全速 8 / 3/4 水位 5 / 近满 3
+    assert [budget(8, r) for r in (0, 3, 15, 22)] == [8, 8, 5, 3]
+    # 并发 ≤3:与旧硬编码 3/2/1 兼容(全速档等价)
+    assert [budget(3, r) for r in (0, 15, 22)] == [3, 2, 1]
+    assert [budget(2, r) for r in (0, 15, 22)] == [2, 1, 1]
+    assert [budget(1, r) for r in (0, 15, 22)] == [1, 1, 1]
+    # 源码中不得再出现旧硬编码坡道与整队 gather 等待
+    import inspect
+
+    src = inspect.getsource(ps.PrefetchWorker._fill_window)
+    assert "3 if ready_count" not in src, "硬编码坡道已由 lane_budget 替代"
+    assert "asyncio.gather(*tasks" not in src, (
+        "补位不得整队等待最慢者(发射后即回+完成回调补位)"
+    )

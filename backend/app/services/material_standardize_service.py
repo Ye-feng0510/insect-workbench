@@ -147,7 +147,10 @@ def standardize_batch(
         db.commit()
 
         for index, item in enumerate(items, start=1):
-            # 批次被用户删除/切换时优雅中止(状态由调用方决定)
+            # 批次被用户删除/切换时优雅中止(状态由调用方决定)。
+            # 注意:循环体只读,不留未提交脏写——脏写会随下次查询 autoflush
+            # 抢到 SQLite 写锁并跨图片压缩(秒级)持有,使进度回调(另一连接)
+            # 陷入最长 60s 的锁等待风暴,高竞争期吞吐塌方(v1.3.13 修复)。
             fresh_batch = db.get(MaterialBatch, batch_id)
             if fresh_batch is None:
                 return stats
@@ -163,10 +166,11 @@ def standardize_batch(
             stats["processed"] = (
                 stats["replaced"] + stats["skipped"] + stats["failed"]
             )
-            fresh_batch.preprocessed_count = stats["processed"]
             if progress_cb is not None:
                 progress_cb(index, total or len(items))
             if index % 5 == 0 or index == len(items):
+                # 进度值仅在提交瞬间落脏,提交后立即释放写锁
+                fresh_batch.preprocessed_count = stats["processed"]
                 _commit_progress(db, batch_id, stats["processed"])
 
         _finalize_batch(batch_id, stats["processed"], session_factory)

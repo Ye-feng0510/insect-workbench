@@ -33,7 +33,12 @@ from app.services import (
 
 
 @pytest.fixture
-def auth_env():
+def auth_env(monkeypatch):
+    # 测试走 http://testserver,Secure cookie 不会被回传(开发机 .env 可能
+    # 配置了 AUTH_COOKIE_SECURE=true,生产 HTTPS 用);强制关闭保证套件封闭
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "auth_cookie_secure", False)
     app.dependency_overrides.pop(get_auth_context, None)
     engine = create_engine(
         "sqlite://",

@@ -19,6 +19,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy import text, update
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -119,15 +120,22 @@ def _update_progress(
 
     v1.3.12:接入锁冲突退避重试。进度写本身可丢弃(下一个节流周期会以
     更新值覆盖),重试后仍失败仅告警,不影响摄取流程。
+    v1.3.13:改为单语句 UPDATE(免读快照,杜绝 BUSY_SNAPSHOT 型即败)+
+    每连接 500ms 短 busy_timeout——可丢写不应在竞争期把摄取线程拖进
+    4×15s 的等待风暴,总预算压缩到 ~2.5s 后快速放弃。
     """
     def _write() -> None:
         db = session_factory()
         try:
-            job = db.get(MaterialIngestJob, job_id)
-            if job is None or job.status != INGEST_STATUS_PROCESSING:
-                return
-            job.processed_count = processed
-            job.total_planned = planned
+            db.execute(text("PRAGMA busy_timeout=500"))
+            db.execute(
+                update(MaterialIngestJob)
+                .where(
+                    MaterialIngestJob.id == job_id,
+                    MaterialIngestJob.status == INGEST_STATUS_PROCESSING,
+                )
+                .values(processed_count=processed, total_planned=planned)
+            )
             db.commit()
         finally:
             db.close()

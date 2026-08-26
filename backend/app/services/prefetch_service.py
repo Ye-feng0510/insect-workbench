@@ -14,6 +14,7 @@ import hashlib
 import json
 import logging
 import time
+import weakref
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -146,6 +147,9 @@ class PrefetchWorker:
         self._started_at: float = time.monotonic()
         # v1.3.10 任务注册表:pf_id -> 在途 asyncio.Task,供前台接管时取消
         self._tasks: dict[int, asyncio.Task] = {}
+        # v1.3.13 在途任务集:发射后不 gather,完成回调即时唤醒补位,
+        # 消除"整队等最慢者收尾"的补位空窗
+        self._inflight: set[asyncio.Task] = set()
 
     async def start(self) -> None:
         global _global_worker
@@ -168,6 +172,12 @@ class PrefetchWorker:
             except asyncio.CancelledError:
                 pass
             self._task = None
+        # v1.3.13:发射后即回的在途任务也要取消,防止停机后模型调用继续
+        for task in list(self._inflight):
+            task.cancel()
+        if self._inflight:
+            await asyncio.gather(*self._inflight, return_exceptions=True)
+            self._inflight.clear()
         _global_worker = None
         self._stop_event.clear()
         self._wakeup_event.clear()
@@ -401,6 +411,18 @@ class PrefetchWorker:
                         return
 
             # 收集所有 queued 任务并并行执行
+            # v1.3.13:产能坡道按配置并发等比缩放,不再硬编码 3/2/1。
+            # 旧硬编码按默认并发 2 设计,并发调高后被架空(实测并发 8 时
+            # 同路最多起 3 个任务,产能 ~5 张/分,跟不上 3 秒/张 = 20 张/分)。
+            # 档位语义:半水以下全速(缓冲被快速消费的稳态即此档),
+            # 3/4 水位约 62.5%,近满约 37.5%;并发 ≤3 时与旧硬编码(3/2/1)一致。
+            configured = max(1, settings.material_prefetch_concurrency)
+            if ready_count < target // 2:
+                lane_budget = configured
+            elif ready_count < (target * 3) // 4:
+                lane_budget = max(1, round(configured * 0.625))
+            else:
+                lane_budget = max(1, round(configured * 0.375))
             queued_items = (
                 db.query(MaterialPrefetchResult)
                 .filter(
@@ -408,26 +430,28 @@ class PrefetchWorker:
                     MaterialPrefetchResult.status == PREFETCH_STATUS_QUEUED,
                     MaterialPrefetchResult.config_fingerprint == fingerprint,
                 )
-                .limit(
-                    min(
-                        settings.material_prefetch_concurrency,
-                        3 if ready_count < 3 else 2 if ready_count < target // 2 else 1,
-                    )
-                )
+                .limit(lane_budget)
                 .all()
             )
         finally:
             db.close()
 
-        # 并行执行 queued 任务
-        if queued_items:
-            # 动态调整并发：ready < target 时全速，接近 high 时降速
-            tasks = []
-            for pf in queued_items:
-                # 再次检查 running 数量，避免超过并发限制
-                tasks.append(self._run_prefetch_task(pf.id, pf.item_id, fingerprint))
-            if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
+        # v1.3.13:发射后即回——每路任务独立完成并即时唤醒补位,
+        # 消除旧 gather"整队等最慢者收尾"的空窗(慢 30s 的调用会
+        # 让 8 路有效并发短暂跌到 0)。并发上限由 semaphore+调度器保证。
+        for pf in queued_items:
+            task = asyncio.create_task(
+                self._run_prefetch_task(pf.id, pf.item_id, fingerprint)
+            )
+            self._inflight.add(task)
+
+            def _on_done(_t: asyncio.Task, _worker=weakref.ref(self)) -> None:
+                worker = _worker()
+                if worker is not None:
+                    worker._inflight.discard(_t)
+                    worker.notify()
+
+            task.add_done_callback(_on_done)
 
     async def _run_prefetch_task(self, pf_id: int, item_id: int, fingerprint: str) -> None:
         """单个预加载任务：原子领取 → 调用模型 → 保存结果。
