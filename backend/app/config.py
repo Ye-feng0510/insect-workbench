@@ -117,7 +117,9 @@ class Settings(BaseSettings):
     # 上传解析异步任务(收包即返回,后台解压+校验+入库)
     material_ingest_progress_interval_items: int = 10  # 每解析 N 张更新一次进度
     material_ingest_progress_interval_seconds: float = 2.0  # 或每 N 秒更新一次进度
-    material_ingest_job_max_age_hours: int = 24  # 遗留 processing 任务判定中断的时限
+    # v1.3.12 陈旧任务看门狗:processing 超过该秒数无进度更新的任务自动回收,
+    # 防止线程异常死亡后上传被 409 永久锁死(0=关闭)
+    material_ingest_stale_job_seconds: int = 900
 
     # 解析完成后后台预生成预览图(0=关闭)
     material_preview_prewarm_count: int = 12

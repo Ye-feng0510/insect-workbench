@@ -6,6 +6,12 @@
 - PNG/WebP 转 JPEG 时同步改后缀并更新 material_items.stored_path
 - 单线程逐张处理,每张前检查批次仍存在;内存压力时退避等待
 
+v1.3.12 锁冲突韧性:
+- 周期性进度提交撞锁时放弃本次(进度写可丢,下个周期覆盖),
+  不让瞬态锁把整批误判为"标准化失败已降级";
+- 终态写入(完成/降级)与 stored_path 同步(不可丢)接入
+  run_write_with_retry 新会话整段重放。
+
 设计约束:
 - 全部阈值来自 settings(环境变量),无硬编码
 - 独立模块,不依赖识别/预取/预览服务,可被任意编排器调用
@@ -20,9 +26,11 @@ from pathlib import Path
 from typing import Any, Callable
 
 from PIL import Image, ImageOps, UnidentifiedImageError
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import settings
+from app.db_retry import run_write_with_retry
 from app.models import (
     MATERIAL_STATUS_PENDING,
     MaterialBatch,
@@ -84,6 +92,23 @@ def _should_replace(old_size: int, new_size: int) -> bool:
     return new_size < old_size * settings.material_standardize_min_saving_ratio
 
 
+def _commit_progress(db: Session, batch_id: int, processed: int) -> None:
+    """周期性进度提交:锁冲突时放弃本次(可丢写),不让整批误降级。
+
+    v1.3.12:WAL 快照过期型锁会让 commit 立即失败且 busy_timeout 无效;
+    此处为纯进度写,rollback 后继续即可,下个周期自然补上。
+    """
+    try:
+        db.commit()
+    except OperationalError:
+        db.rollback()
+        logger.warning(
+            "标准化进度提交撞锁,跳过本次 batch_id=%s processed=%s",
+            batch_id,
+            processed,
+        )
+
+
 def standardize_batch(
     batch_id: int,
     session_factory: sessionmaker,
@@ -142,13 +167,9 @@ def standardize_batch(
             if progress_cb is not None:
                 progress_cb(index, total or len(items))
             if index % 5 == 0 or index == len(items):
-                db.commit()
+                _commit_progress(db, batch_id, stats["processed"])
 
-        final_batch = db.get(MaterialBatch, batch_id)
-        if final_batch is not None:
-            final_batch.preprocess_status = PREPROCESS_STATUS_COMPLETED
-            final_batch.preprocessed_count = stats["processed"]
-            db.commit()
+        _finalize_batch(batch_id, stats["processed"], session_factory)
         db.expire_all()
         return stats
     except Exception:
@@ -156,6 +177,26 @@ def standardize_batch(
         raise
     finally:
         db.close()
+
+
+def _finalize_batch(
+    batch_id: int,
+    processed: int,
+    session_factory: sessionmaker,
+) -> None:
+    """标准化完成终态:新会话+锁重试(终态不可丢,失败上抛由编排降级)。"""
+    def _write() -> None:
+        db: Session = session_factory()
+        try:
+            batch = db.get(MaterialBatch, batch_id)
+            if batch is not None:
+                batch.preprocess_status = PREPROCESS_STATUS_COMPLETED
+                batch.preprocessed_count = processed
+                db.commit()
+        finally:
+            db.close()
+
+    run_write_with_retry(_write, f"standardize-final-{batch_id}")
 
 
 def _standardize_one(
@@ -184,14 +225,35 @@ def _standardize_one(
         new_path = _jpg_path_for(source)
         os.replace(target, new_path)
         source.unlink(missing_ok=True)
-        item.stored_path = str(new_path)
-        db.commit()
+        try:
+            _commit_stored_path(db, item, str(new_path))
+        except Exception:
+            # stored_path 同步是硬约束:终究失败则回滚文件改名,
+            # 保持 DB/磁盘一致(该张按失败计,由上抛方降级)
+            os.replace(new_path, source)
+            raise
         stats["renamed"] += 1
     else:
         os.replace(target, source)
 
     stats["replaced"] += 1
     return stats
+
+
+def _commit_stored_path(db: Session, item: MaterialItem, new_path_str: str) -> None:
+    """改后缀后的 stored_path 同步提交:锁重试,每次重放重新赋值。
+
+    提交失败时 rollback 使对象过期,重放中重新赋值标记脏后再提交。
+    """
+    def _write() -> None:
+        try:
+            item.stored_path = new_path_str
+            db.commit()
+        except OperationalError:
+            db.rollback()
+            raise
+
+    run_write_with_retry(_write, f"standardize-rename-{item.id}")
 
 
 def _jpg_path_for(source: Path) -> Path:
@@ -204,14 +266,7 @@ def mark_batch_preprocess_failed(batch_id: int, session_factory: sessionmaker) -
 
     无论当前状态(pending/processing)均强制降级——调用语境即"标准化已判失败"。
     """
-    db: Session = session_factory()
-    try:
-        batch = db.get(MaterialBatch, batch_id)
-        if batch is not None:
-            batch.preprocess_status = PREPROCESS_STATUS_FAILED
-            db.commit()
-    finally:
-        db.close()
+    _mark_batch_status(batch_id, session_factory, PREPROCESS_STATUS_FAILED)
 
 
 def mark_batch_preprocess_completed(
@@ -219,15 +274,34 @@ def mark_batch_preprocess_completed(
     session_factory: sessionmaker,
 ) -> None:
     """跳过标准化(开关关闭等场景)时直接置完成,保持门槛语义一致。"""
-    db: Session = session_factory()
+    _mark_batch_status(batch_id, session_factory, PREPROCESS_STATUS_COMPLETED)
+
+
+def _mark_batch_status(
+    batch_id: int,
+    session_factory: sessionmaker,
+    status: str,
+) -> None:
+    """批次预处理状态写入:新会话+锁重试(终态不可丢)。"""
+    def _write() -> None:
+        db: Session = session_factory()
+        try:
+            batch = db.get(MaterialBatch, batch_id)
+            if batch is not None:
+                batch.preprocess_status = status
+                if status == PREPROCESS_STATUS_COMPLETED:
+                    batch.preprocessed_count = int(batch.total_count or 0)
+                db.commit()
+        finally:
+            db.close()
+
     try:
-        batch = db.get(MaterialBatch, batch_id)
-        if batch is not None:
-            batch.preprocess_status = PREPROCESS_STATUS_COMPLETED
-            batch.preprocessed_count = int(batch.total_count or 0)
-            db.commit()
-    finally:
-        db.close()
+        run_write_with_retry(_write, f"standardize-status-{batch_id}")
+    except Exception:
+        logger.error(
+            "批次预处理状态写入失败 batch_id=%s status=%s", batch_id, status, exc_info=True
+        )
+        raise
 
 
 def summarize_stats(stats: dict[str, Any]) -> str:

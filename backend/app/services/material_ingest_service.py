@@ -2,18 +2,29 @@
 
 网络收包仍由路由完成,解压/图片校验/批次入库复用 materials_service 原语,
 本模块只负责任务状态、进度、后台线程与重启恢复。
+
+v1.3.12 锁冲突韧性:
+- 所有 job 行写入接入 run_write_with_retry(每次重试用全新会话/事务,
+  同时覆盖 busy_timeout 型与 WAL 快照过期立即失败型两类锁);
+- 线程退出兜底:job 若仍 processing 则强写终态,杜绝"线程死亡、
+  任务永久 processing"导致上传 409 锁死;
+- has_active_job 惰性看门狗:陈旧 processing 任务自动回收放行上传。
 """
 from __future__ import annotations
 
 import logging
 import threading
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
+
 from app.config import settings
 from app.database import SessionLocal
+from app.db_retry import DatabaseUnavailableError, run_write_with_retry
 from app.models import (
     INGEST_STAGE_EXTRACTING,
     INGEST_STAGE_STANDARDIZING,
@@ -30,7 +41,48 @@ _threads_lock = threading.Lock()
 
 
 def has_active_job(db: Session, owner_id: int) -> bool:
-    """判断 owner 是否已有未完成摄取任务。"""
+    """判断 owner 是否已有未完成摄取任务(上传前的 409 门槛)。
+
+    v1.3.12 惰性看门狗:processing 且 updated_at 超过阈值的任务视为
+    线程已死亡,自动回收为 failed 并放行上传。不新增后台线程,零成本。
+    被误回收但仍在运行的任务不受影响——终态写入带 processing 幂等守卫,
+    线程成功收尾时照常覆盖为 completed(真相优先)。
+    """
+    stale_seconds = settings.material_ingest_stale_job_seconds
+    if stale_seconds > 0:
+        def _reap() -> None:
+            try:
+                cutoff = datetime.utcnow() - timedelta(seconds=stale_seconds)
+                stale_jobs = (
+                    db.query(MaterialIngestJob)
+                    .filter(
+                        MaterialIngestJob.owner_id == owner_id,
+                        MaterialIngestJob.status == INGEST_STATUS_PROCESSING,
+                        MaterialIngestJob.updated_at < cutoff,
+                    )
+                    .all()
+                )
+                for job in stale_jobs:
+                    job.status = INGEST_STATUS_FAILED
+                    job.error_message = "任务长时间无进度,已被系统自动回收,请重新上传"
+                    logger.warning(
+                        "看门狗回收陈旧摄取任务 job_id=%s updated_at=%s",
+                        job.id,
+                        job.updated_at,
+                    )
+                if stale_jobs:
+                    db.commit()
+            except OperationalError:
+                db.rollback()
+                raise
+
+        try:
+            run_write_with_retry(_reap, f"ingest-reap-{owner_id}")
+        except Exception:
+            db.rollback()
+            logger.warning(
+                "看门狗回收提交失败,按实时状态判断 owner_id=%s", owner_id, exc_info=True
+            )
     return (
         db.query(MaterialIngestJob.id)
         .filter(
@@ -63,20 +115,81 @@ def _update_progress(
     planned: int,
     session_factory: sessionmaker,
 ) -> None:
-    """以可配置节流频率更新进度,避免每张图片都产生 SQLite 写事务。"""
-    db = session_factory()
+    """以可配置节流频率更新进度,避免每张图片都产生 SQLite 写事务。
+
+    v1.3.12:接入锁冲突退避重试。进度写本身可丢弃(下一个节流周期会以
+    更新值覆盖),重试后仍失败仅告警,不影响摄取流程。
+    """
+    def _write() -> None:
+        db = session_factory()
+        try:
+            job = db.get(MaterialIngestJob, job_id)
+            if job is None or job.status != INGEST_STATUS_PROCESSING:
+                return
+            job.processed_count = processed
+            job.total_planned = planned
+            db.commit()
+        finally:
+            db.close()
+
     try:
-        job = db.get(MaterialIngestJob, job_id)
-        if job is None or job.status != INGEST_STATUS_PROCESSING:
-            return
-        job.processed_count = processed
-        job.total_planned = planned
-        db.commit()
+        run_write_with_retry(_write, f"ingest-progress-{job_id}")
+    except DatabaseUnavailableError:
+        logger.warning(
+            "更新素材摄取进度失败 job_id=%s(锁冲突重试后仍失败,进度将被下次更新覆盖)",
+            job_id,
+        )
     except Exception:
-        db.rollback()
         logger.warning("更新素材摄取进度失败 job_id=%s", job_id, exc_info=True)
-    finally:
-        db.close()
+
+
+def _finalize_job(
+    job_id: int,
+    status: str,
+    session_factory: sessionmaker,
+    *,
+    total_count: int | None = None,
+    processed_floor: int | None = None,
+    error_message: str = "",
+) -> None:
+    """写入任务终态(completed/failed),新会话+锁重试。
+
+    幂等守卫:仅当任务仍处于 processing 时更新,避免覆盖看门狗/兜底/对方
+    已落地的终态。
+    """
+    def _write() -> None:
+        db = session_factory()
+        try:
+            job = db.get(MaterialIngestJob, job_id)
+            if job is None or job.status != INGEST_STATUS_PROCESSING:
+                return
+            job.status = status
+            if total_count is not None:
+                job.total_count = total_count
+            if processed_floor is not None:
+                job.processed_count = max(job.processed_count, processed_floor)
+            if error_message:
+                job.error_message = error_message
+            db.commit()
+        finally:
+            db.close()
+
+    run_write_with_retry(_write, f"ingest-finalize-{job_id}")
+
+
+def _ensure_terminal_state(job_id: int, session_factory: sessionmaker) -> None:
+    """线程退出兜底:job 仍 processing 说明终态未落地(如终态提交连环撞锁),
+    强写 failed 终态。上抛异常无意义,尽力而为并记录。
+    """
+    try:
+        _finalize_job(
+            job_id,
+            INGEST_STATUS_FAILED,
+            session_factory,
+            error_message="摄取线程异常退出,请重新上传",
+        )
+    except Exception:
+        logger.error("摄取线程兜底终态写入失败 job_id=%s", job_id, exc_info=True)
 
 
 def _process_job(
@@ -144,24 +257,35 @@ def _process_job(
                     batch.id, session_factory
                 )
         _prewarm_previews(result, owner_id, session_factory)
-        job = db.get(MaterialIngestJob, job_id)
-        if job is not None:
-            job.status = INGEST_STATUS_COMPLETED
-            job.total_count = int(result.get("total_count", 0))
-            job.processed_count = max(job.processed_count, job.total_count)
-            job.error_message = standardize_note
-            db.commit()
+        _finalize_job(
+            job_id,
+            INGEST_STATUS_COMPLETED,
+            session_factory,
+            total_count=int(result.get("total_count", 0)),
+            processed_floor=int(result.get("total_count", 0)),
+            error_message=standardize_note,
+        )
         from app.services.prefetch_service import notify_worker
 
         notify_worker()
     except Exception as exc:
         db.rollback()
-        job = db.get(MaterialIngestJob, job_id)
-        if job is not None:
-            job.status = INGEST_STATUS_FAILED
-            job.error_message = str(getattr(exc, "detail", exc))
-            db.commit()
         logger.warning("素材摄取失败 job_id=%s", job_id, exc_info=True)
+        _ensure_terminal_state(job_id, session_factory)
+        # 兜底写入的是通用文案;能提取到业务错误时再精化一次
+        detail = str(getattr(exc, "detail", exc))
+        if detail:
+            try:
+                db2 = session_factory()
+                try:
+                    job = db2.get(MaterialIngestJob, job_id)
+                    if job is not None and job.status == INGEST_STATUS_FAILED:
+                        job.error_message = detail
+                        db2.commit()
+                finally:
+                    db2.close()
+            except Exception:
+                logger.warning("素材摄取失败原因落库失败 job_id=%s", job_id, exc_info=True)
         source_path.unlink(missing_ok=True)
     finally:
         db.close()
@@ -173,17 +297,20 @@ def _set_job_stage(
     session_factory: sessionmaker,
 ) -> None:
     """更新摄取任务阶段标记(extracting/standardizing),失败仅记录日志。"""
-    db = session_factory()
+    def _write() -> None:
+        db = session_factory()
+        try:
+            job = db.get(MaterialIngestJob, job_id)
+            if job is not None and job.status == INGEST_STATUS_PROCESSING:
+                job.stage = stage
+                db.commit()
+        finally:
+            db.close()
+
     try:
-        job = db.get(MaterialIngestJob, job_id)
-        if job is not None and job.status == INGEST_STATUS_PROCESSING:
-            job.stage = stage
-            db.commit()
+        run_write_with_retry(_write, f"ingest-stage-{job_id}")
     except Exception:
-        db.rollback()
         logger.warning("更新摄取阶段失败 job_id=%s", job_id, exc_info=True)
-    finally:
-        db.close()
 
 
 def _prewarm_previews(
@@ -270,6 +397,8 @@ def _run_job_thread(
         current = threading.current_thread()
         with _threads_lock:
             _threads.discard(current)
+        # v1.3.12 兜底:线程以任何方式退出时,job 不得残留 processing
+        _ensure_terminal_state(job_id, session_factory)
 
 
 def recover_interrupted_jobs() -> None:
